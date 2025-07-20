@@ -1,0 +1,7 @@
+mcp>=1.0.0
+kubernetes>=28.1.0
+pyyaml>=6.0
+python-dateutil>=2.8.2
+regex>=2023.8.8
+asyncio-mqtt>=0.16.1
+aiofiles>=23.2.1 

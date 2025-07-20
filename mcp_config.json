@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "ptp-mcp-server": {
+      "command": "python",
+      "args": ["ptp_mcp_server.py"],
+      "env": {
+        "PYTHONPATH": ".",
+        "PTP_NAMESPACE": "openshift-ptp",
+        "PTP_DAEMON_NAME": "linuxptp-daemon",
+        "PTP_CONTAINER_NAME": "linuxptp-daemon-container"
+      }
+    }
+  }
+} 
