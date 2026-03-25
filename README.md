@@ -317,12 +317,14 @@ ptp-mcp-server/
 ├── performance_test.py    # Performance benchmarking
 ├── requirements.txt       # Python dependencies
 ├── Dockerfile             # Container image definition
-└── k8s/                   # Kubernetes/OpenShift manifests
-    ├── kustomization.yaml # Kustomize configuration
-    ├── rbac.yaml          # ServiceAccount & RBAC
-    ├── deployment.yaml    # Deployment specification
-    ├── service.yaml       # Service definition
-    └── olsconfig-example.yaml  # OLS integration example
+├── k8s/                   # Kubernetes/OpenShift manifests
+│   ├── kustomization.yaml # Kustomize configuration
+│   ├── rbac.yaml          # ServiceAccount & RBAC
+│   ├── deployment.yaml    # Deployment specification
+│   ├── service.yaml       # Service definition
+│   └── olsconfig-example.yaml  # OLS integration example
+└── docs/
+    └── ptp-troubleshooting-guide.md  # RAG content for OLS
 ```
 
 ## 🔍 PTP Concepts Supported
