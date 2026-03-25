@@ -320,18 +320,37 @@ class PTPLogParser:
     def _parse_ptp4l_message(self, message: str) -> Dict[str, Any]:
         """Parse ptp4l messages"""
         parsed = {}
-        
+
+        # Extract offset, servo state, frequency, and path delay
+        # e.g. "master offset -5 s2 freq +1234 path delay 456"
+        offset_match = re.search(
+            r"master offset\s+(-?\d+)\s+(\w+)\s+freq\s+([+-]?\d+)\s+path delay\s+(-?\d+)",
+            message
+        )
+        if offset_match:
+            parsed["offset"] = int(offset_match.group(1))
+            parsed["state"] = offset_match.group(2)
+            parsed["frequency"] = int(offset_match.group(3))
+            parsed["path_delay"] = int(offset_match.group(4))
+
         # Extract BMCA information
         bmca_match = re.search(r"selected (\w+) clock", message)
         if bmca_match:
             parsed["selected_clock"] = bmca_match.group(1)
-        
-        # Extract port state
-        port_match = re.search(r"port (\d+): ([\w\s]+)", message)
+
+        # Extract port state (handles optional interface name in parentheses)
+        port_match = re.search(r"port\s+(\d+)\s*(?:\([^)]+\))?:\s+([\w\s]+)", message)
         if port_match:
             parsed["port"] = int(port_match.group(1))
             parsed["port_state"] = port_match.group(2).strip()
-        
+            # Extract transition details if present
+            transition_match = re.search(r"(\w+)\s+to\s+(\w+)(?:\s+on\s+(.+))?", parsed["port_state"])
+            if transition_match:
+                parsed["from_state"] = transition_match.group(1)
+                parsed["to_state"] = transition_match.group(2)
+                if transition_match.group(3):
+                    parsed["transition_reason"] = transition_match.group(3)
+
         return parsed
     
     def _parse_dpll_component_message(self, message: str) -> Dict[str, Any]:
@@ -443,7 +462,7 @@ class PTPLogParser:
             latest_gm = max(gm_logs, key=lambda x: x.timestamp)
             gm_info["status"] = latest_gm.parsed_data.get("gm_status", "unknown")
             gm_info["interface"] = latest_gm.parsed_data.get("interface")
-            gm_info["last_seen"] = latest_gm.timestamp
+            gm_info["last_seen"] = latest_gm.timestamp.isoformat() if latest_gm.timestamp else None
         
         # Look for phc2sys offset information
         phc2sys_logs = [log for log in logs if log.component == "phc2sys"]
@@ -461,45 +480,242 @@ class PTPLogParser:
             "gnss_available": False,
             "offset_in_range": False,
             "last_offset": None,
-            "last_update": None
+            "last_update": None,
+            "servo_state": None,
+            "port_state": None,
+            "grandmaster_lost": False,
+            "transition_reason": None
         }
-        
-        # Look for DPLL decision messages
-        dpll_logs = [log for log in logs if "dpll" in log.component.lower() and "decision" in log.message]
+
+        # Track timestamps to determine most recent state
+        dpll_timestamp = None
+        phc2sys_timestamp = None
+        ptp4l_timestamp = None
+
+        # Look for DPLL log lines (for systems with hardware DPLL)
+        dpll_logs = [log for log in logs if "dpll" in log.component.lower()]
         if dpll_logs:
             latest_dpll = max(dpll_logs, key=lambda x: x.timestamp)
             parsed = latest_dpll.parsed_data
-            sync_status["dpll_locked"] = parsed.get("status", 0) == 3
-            sync_status["offset_in_range"] = parsed.get("in_spec", False)
-            sync_status["last_offset"] = parsed.get("offset")
-            sync_status["last_update"] = latest_dpll.timestamp
-        
+            dpll_timestamp = latest_dpll.timestamp
+
+            # Check for decision messages (Go-style DPLL logs)
+            if "status" in parsed:
+                sync_status["dpll_locked"] = parsed.get("status", 0) == 3
+                sync_status["offset_in_range"] = parsed.get("in_spec", False)
+                sync_status["last_offset"] = parsed.get("offset")
+                sync_status["last_update"] = latest_dpll.timestamp.isoformat() if latest_dpll.timestamp else None
+                if parsed.get("source_lost"):
+                    sync_status["dpll_source_lost"] = True
+                if parsed.get("on_holdover"):
+                    sync_status["dpll_on_holdover"] = True
+
+            # Check for DPLL component logs (frequency_status, phase_status, pps_status)
+            dpll_component_logs = [log for log in dpll_logs if log.parsed_data.get("frequency_status") is not None]
+            if dpll_component_logs:
+                latest_dpll_comp = max(dpll_component_logs, key=lambda x: x.timestamp)
+                comp_parsed = latest_dpll_comp.parsed_data
+                sync_status["dpll_frequency_status"] = comp_parsed.get("frequency_status")
+                sync_status["dpll_phase_status"] = comp_parsed.get("phase_status")
+                sync_status["dpll_pps_status"] = comp_parsed.get("pps_status")
+                sync_status["dpll_state"] = comp_parsed.get("state")
+                if comp_parsed.get("offset") is not None:
+                    sync_status["last_offset"] = comp_parsed["offset"]
+                # Use DPLL state to determine lock if no decision message was found
+                if "status" not in parsed:
+                    dpll_state = comp_parsed.get("state", "").lower()
+                    sync_status["dpll_locked"] = dpll_state in ("locked", "locked_ho")
+                    sync_status["last_update"] = latest_dpll_comp.timestamp.isoformat() if latest_dpll_comp.timestamp else None
+
+            # Check for dpll_state from Go-style logs
+            if parsed.get("dpll_state"):
+                sync_status["dpll_state"] = parsed["dpll_state"]
+
+        # Look for phc2sys servo state (for software PTP without DPLL)
+        # Servo states: s0 = unlocked, s1 = clock step, s2 = locked
+        phc2sys_logs = [log for log in logs if log.component == "phc2sys" and log.parsed_data.get("state")]
+        if phc2sys_logs:
+            latest_phc2sys = max(phc2sys_logs, key=lambda x: x.timestamp)
+            parsed = latest_phc2sys.parsed_data
+            servo_state = parsed.get("state", "")
+            sync_status["servo_state"] = servo_state
+            phc2sys_timestamp = latest_phc2sys.timestamp
+
+            # s2 means locked/tracking
+            if servo_state == "s2":
+                sync_status["dpll_locked"] = True
+
+            # Check offset is in range (within 1000ns is generally good)
+            offset = parsed.get("offset")
+            if offset is not None:
+                sync_status["last_offset"] = offset
+                sync_status["offset_in_range"] = abs(offset) < 1000
+                sync_status["last_update"] = latest_phc2sys.timestamp.isoformat() if latest_phc2sys.timestamp else None
+
+        # Look for ptp4l port state transitions and BMCA decisions
+        ptp4l_logs = [log for log in logs if log.component == "ptp4l"]
+
+        # Check for port state (including transitions)
+        port_state_logs = [log for log in ptp4l_logs if log.parsed_data.get("port_state") or log.parsed_data.get("to_state")]
+        if port_state_logs:
+            latest_ptp4l = max(port_state_logs, key=lambda x: x.timestamp)
+            ptp4l_timestamp = latest_ptp4l.timestamp
+
+            # Get the current/destination port state
+            to_state = latest_ptp4l.parsed_data.get("to_state")
+            port_state = latest_ptp4l.parsed_data.get("port_state", "")
+
+            # Use to_state if available (from transition), otherwise use port_state
+            current_state = to_state if to_state else port_state
+            sync_status["port_state"] = current_state
+
+            # Capture transition reason if present
+            if latest_ptp4l.parsed_data.get("transition_reason"):
+                sync_status["transition_reason"] = latest_ptp4l.parsed_data.get("transition_reason")
+
+        # Check for grandmaster loss (local clock selected as best master)
+        bmca_logs = [log for log in ptp4l_logs if log.parsed_data.get("selected_clock")]
+        if bmca_logs:
+            latest_bmca = max(bmca_logs, key=lambda x: x.timestamp)
+            selected_clock = latest_bmca.parsed_data.get("selected_clock", "")
+
+            # "local" clock selection means grandmaster was lost
+            if selected_clock.lower() == "local":
+                sync_status["grandmaster_lost"] = True
+                # Update timestamp if this is more recent
+                if ptp4l_timestamp is None or (latest_bmca.timestamp and latest_bmca.timestamp > ptp4l_timestamp):
+                    ptp4l_timestamp = latest_bmca.timestamp
+
+        # Determine lock status based on port state and grandmaster
+        # Port state transitions to non-SLAVE states indicate loss of sync
+        current_port_state = sync_status.get("port_state", "")
+        if current_port_state:
+            current_port_upper = current_port_state.upper()
+
+            # SLAVE state with external grandmaster = healthy
+            if "SLAVE" in current_port_upper and not sync_status["grandmaster_lost"]:
+                # Only set locked if ptp4l state is more recent than phc2sys
+                if ptp4l_timestamp and phc2sys_timestamp:
+                    if ptp4l_timestamp >= phc2sys_timestamp:
+                        sync_status["dpll_locked"] = True
+                elif not sync_status["dpll_locked"]:
+                    sync_status["dpll_locked"] = True
+
+            # Non-SLAVE states (LISTENING, FAULTY, etc.) = NOT locked
+            # These states override servo state because port state change happens after servo reports
+            elif any(state in current_port_upper for state in ["LISTENING", "FAULTY", "DISABLED", "INITIALIZING"]):
+                # Port is not in sync - override any previous locked indication
+                # Check if port state is more recent than servo state
+                if ptp4l_timestamp and phc2sys_timestamp and ptp4l_timestamp > phc2sys_timestamp:
+                    sync_status["dpll_locked"] = False
+                    sync_status["offset_in_range"] = False
+                elif ptp4l_timestamp and not phc2sys_timestamp:
+                    sync_status["dpll_locked"] = False
+                    sync_status["offset_in_range"] = False
+
+        # Grandmaster loss always means not locked (unless we have GNSS/holdover)
+        if sync_status["grandmaster_lost"]:
+            # Check if grandmaster loss is more recent than any lock indicators
+            if ptp4l_timestamp:
+                if (not dpll_timestamp or ptp4l_timestamp > dpll_timestamp) and \
+                   (not phc2sys_timestamp or ptp4l_timestamp > phc2sys_timestamp):
+                    sync_status["dpll_locked"] = False
+                    sync_status["offset_in_range"] = False
+
         # Look for GNSS status
         gnss_logs = [log for log in logs if "gnss" in log.component.lower()]
         if gnss_logs:
             latest_gnss = max(gnss_logs, key=lambda x: x.timestamp)
             sync_status["gnss_available"] = latest_gnss.parsed_data.get("gnss_status", 0) > 0
-        
+
         return sync_status
     
     def extract_clock_hierarchy(self, logs: List[LogEntry]) -> Dict[str, Any]:
         """Extract clock hierarchy information from logs"""
         hierarchy = {
             "grandmaster": None,
-            "boundary_clocks": [],
-            "ordinary_clocks": [],
-            "transparent_clocks": []
+            "parent_clock": None,
+            "steps_removed": None,
+            "visibility_note": "Only the grandmaster and immediate parent clock are visible from PTP daemon logs. Intermediate boundary clocks in the path are not reported."
         }
-        
+
         # Look for ptp4l BMCA messages
         ptp4l_logs = [log for log in logs if log.component == "ptp4l" and "selected" in log.message]
         for log in ptp4l_logs:
             if "grandmaster" in log.parsed_data.get("selected_clock", "").lower():
                 hierarchy["grandmaster"] = {
                     "status": "active",
-                    "last_seen": log.timestamp
+                    "last_seen": log.timestamp.isoformat() if log.timestamp else None
                 }
-        
+
+        # Look for daemon.go logs with grandmaster and parent information
+        # Format: {ParentPortIdentity:... GrandmasterIdentity:507c6f.fffe.1fb16c GrandmasterClockClass:6 ...}
+        for log in logs:
+            if "GrandmasterIdentity" in log.message:
+                gm_id_match = re.search(r"GrandmasterIdentity:([a-f0-9.]+)", log.message)
+                gm_class_match = re.search(r"GrandmasterClockClass:(\d+)", log.message)
+                gm_pri1_match = re.search(r"GrandmasterPriority1:(\d+)", log.message)
+                gm_pri2_match = re.search(r"GrandmasterPriority2:(\d+)", log.message)
+                gm_accuracy_match = re.search(r"GrandmasterClockAccuracy:(\d+)", log.message)
+                parent_match = re.search(r"ParentPortIdentity:([a-f0-9.-]+)", log.message)
+
+                if gm_id_match:
+                    hierarchy["grandmaster"] = {
+                        "identity": gm_id_match.group(1),
+                        "clock_class": int(gm_class_match.group(1)) if gm_class_match else None,
+                        "clock_class_description": self._get_clock_class_description(int(gm_class_match.group(1))) if gm_class_match else None,
+                        "clock_accuracy": int(gm_accuracy_match.group(1)) if gm_accuracy_match else None,
+                        "priority1": int(gm_pri1_match.group(1)) if gm_pri1_match else None,
+                        "priority2": int(gm_pri2_match.group(1)) if gm_pri2_match else None,
+                        "status": "active",
+                        "last_seen": log.timestamp.isoformat() if log.timestamp else None
+                    }
+
+                    # Extract parent clock (immediate upstream boundary clock)
+                    if parent_match and hierarchy["parent_clock"] is None:
+                        parent_id = parent_match.group(1)
+                        # Extract clock identity from port identity (remove port number suffix)
+                        clock_id = parent_id.rsplit('-', 1)[0] if '-' in parent_id else parent_id
+                        hierarchy["parent_clock"] = {
+                            "identity": clock_id,
+                            "port_identity": parent_id,
+                            "role": "boundary_clock",
+                            "description": "Immediate upstream clock (direct time source)"
+                        }
+
+        # Look for PMC output with grandmaster information
+        # Format: grandmasterIdentity 507c6f.fffe.1fb16c
+        for log in logs:
+            if "grandmasterIdentity" in log.message.lower() and hierarchy["grandmaster"] is None:
+                gm_id_match = re.search(r"grandmasterIdentity\s+([a-f0-9.]+)", log.message, re.IGNORECASE)
+                if gm_id_match:
+                    hierarchy["grandmaster"] = {
+                        "identity": gm_id_match.group(1),
+                        "status": "active",
+                        "last_seen": log.timestamp.isoformat() if log.timestamp else None
+                    }
+
+        # Look for PMC PARENT_DATA_SET output for parent clock info
+        for log in logs:
+            if "parentPortIdentity" in log.message and hierarchy["parent_clock"] is None:
+                parent_match = re.search(r"parentPortIdentity\s+([a-f0-9.-]+)", log.message)
+                if parent_match:
+                    parent_id = parent_match.group(1)
+                    clock_id = parent_id.rsplit('-', 1)[0] if '-' in parent_id else parent_id
+                    hierarchy["parent_clock"] = {
+                        "identity": clock_id,
+                        "port_identity": parent_id,
+                        "role": "boundary_clock",
+                        "description": "Immediate upstream clock (direct time source)"
+                    }
+
+        # Try to extract steps removed from PMC CURRENT_DATA_SET
+        for log in logs:
+            if "stepsRemoved" in log.message:
+                steps_match = re.search(r"stepsRemoved\s+(\d+)", log.message)
+                if steps_match:
+                    hierarchy["steps_removed"] = int(steps_match.group(1))
+
         return hierarchy
 
     def _compute_offset_stats(self, offsets: List[int]) -> Dict[str, Any]:
@@ -633,6 +849,7 @@ class PTPLogParser:
 
         for log in logs:
             if log.component == "ptp4l":
+                # Check for port state transitions
                 match = re.search(self.extended_patterns["port_state_change"], log.message)
                 if match:
                     port_num = match.group(1)
@@ -694,6 +911,7 @@ class PTPLogParser:
         result["current_frequency_ppb"] = freq_samples[-1]["frequency"]
         result["samples"] = [{"time": s["timestamp"].isoformat(), "freq": s["frequency"]} for s in freq_samples[-20:]]
 
+        # Detect sudden changes (>1000 ppb change between consecutive samples)
         for i in range(1, len(freq_samples)):
             delta = abs(freq_samples[i]["frequency"] - freq_samples[i-1]["frequency"])
             if delta > 1000:
@@ -704,16 +922,21 @@ class PTPLogParser:
                     "to_freq": freq_samples[i]["frequency"]
                 })
 
+        # Calculate drift rate if we have enough samples
         if len(freq_samples) >= 10:
+            # Use first and last 10% of samples to estimate drift
             early_samples = freq_samples[:max(1, len(freq_samples)//10)]
             late_samples = freq_samples[-max(1, len(freq_samples)//10):]
+
             early_avg = sum(s["frequency"] for s in early_samples) / len(early_samples)
             late_avg = sum(s["frequency"] for s in late_samples) / len(late_samples)
 
+            # Calculate time span in hours
             if early_samples[0]["timestamp"] and late_samples[-1]["timestamp"]:
                 time_span = (late_samples[-1]["timestamp"] - early_samples[0]["timestamp"]).total_seconds() / 3600
                 if time_span > 0:
                     result["drift_rate_ppb_per_hour"] = (late_avg - early_avg) / time_span
+
                     if abs(result["drift_rate_ppb_per_hour"]) < 100:
                         result["trend"] = "stable"
                     elif result["drift_rate_ppb_per_hour"] > 0:
@@ -738,6 +961,7 @@ class PTPLogParser:
         for log in logs:
             message_lower = log.message.lower()
 
+            # Check for holdover entry
             if re.search(self.extended_patterns["holdover_entry"], message_lower) or \
                (log.parsed_data.get("on_holdover") == True):
                 if not result["in_holdover"]:
@@ -748,6 +972,7 @@ class PTPLogParser:
                         "timestamp": log.timestamp.isoformat() if log.timestamp else None
                     })
 
+            # Check for holdover exit
             elif re.search(self.extended_patterns["holdover_exit"], message_lower) or \
                  (log.parsed_data.get("on_holdover") == False and result["in_holdover"]):
                 if result["in_holdover"] and holdover_start:
@@ -761,6 +986,7 @@ class PTPLogParser:
                     result["in_holdover"] = False
                     holdover_start = None
 
+        # Calculate current holdover duration if still in holdover
         if result["in_holdover"] and holdover_start:
             result["current_holdover_duration_seconds"] = (datetime.now() - holdover_start).total_seconds()
 
@@ -781,6 +1007,7 @@ class PTPLogParser:
         gnss_status_values = []
 
         for log in logs:
+            # Check ts2phc and gnss component logs
             if log.component in ["ts2phc", "gnss"]:
                 if "gnss_status" in log.parsed_data:
                     status = log.parsed_data["gnss_status"]
@@ -794,16 +1021,19 @@ class PTPLogParser:
                 if "nmea_delay_ns" in log.parsed_data:
                     result["nmea_delay_ns"] = log.parsed_data["nmea_delay_ns"]
 
+                # Check for loss events
                 if re.search(self.extended_patterns["gnss_loss"], log.message.lower()):
                     result["loss_events"].append({
                         "timestamp": log.timestamp.isoformat() if log.timestamp else None,
                         "message": log.message
                     })
 
+            # Check DPLL logs for GNSS source status
             if "source_lost" in log.parsed_data:
                 if log.parsed_data["source_lost"]:
                     result["gnss_available"] = False
 
+        # Determine signal stability
         if gnss_status_values:
             if all(s >= 2 for s in gnss_status_values[-10:]):
                 result["signal_stability"] = "good"
@@ -822,21 +1052,25 @@ class PTPLogParser:
         """Parse PMC command output into structured data"""
         result = {"data": {}}
 
+        # Parse grandmaster identity
         match = re.search(self.extended_patterns["pmc_grandmaster_identity"], pmc_output)
         if match:
             result["grandmaster_identity"] = match.group(1)
             result["data"]["grandmaster_identity"] = match.group(1)
 
+        # Parse clock class
         match = re.search(self.extended_patterns["pmc_clock_class"], pmc_output)
         if match:
             result["grandmaster_clock_class"] = int(match.group(1))
             result["data"]["grandmaster_clock_class"] = int(match.group(1))
 
+        # Parse clock accuracy
         match = re.search(self.extended_patterns["pmc_clock_accuracy"], pmc_output)
         if match:
             result["grandmaster_clock_accuracy"] = match.group(1)
             result["data"]["grandmaster_clock_accuracy"] = match.group(1)
 
+        # Parse priorities
         match = re.search(self.extended_patterns["pmc_priority1"], pmc_output)
         if match:
             result["grandmaster_priority1"] = int(match.group(1))
@@ -847,51 +1081,63 @@ class PTPLogParser:
             result["grandmaster_priority2"] = int(match.group(1))
             result["data"]["grandmaster_priority2"] = int(match.group(1))
 
+        # Parse parent port identity
         match = re.search(self.extended_patterns["pmc_parent_port"], pmc_output)
         if match:
             result["parent_port_identity"] = match.group(1)
             result["data"]["parent_port_identity"] = match.group(1)
 
+        # Parse CURRENT_DATA_SET fields
+        # stepsRemoved
         match = re.search(r"stepsRemoved\s+(\d+)", pmc_output)
         if match:
             result["steps_removed"] = int(match.group(1))
             result["data"]["steps_removed"] = int(match.group(1))
 
+        # offsetFromMaster
         match = re.search(r"offsetFromMaster\s+(-?[\d.]+)", pmc_output)
         if match:
             result["offset_from_master"] = float(match.group(1))
             result["data"]["offset_from_master"] = float(match.group(1))
 
+        # meanPathDelay
         match = re.search(r"meanPathDelay\s+(-?[\d.]+)", pmc_output)
         if match:
             result["mean_path_delay"] = float(match.group(1))
             result["data"]["mean_path_delay"] = float(match.group(1))
 
+        # Parse PORT_DATA_SET fields
+        # portIdentity
         match = re.search(r"portIdentity\s+([a-f0-9.-]+)", pmc_output)
         if match:
             result["port_identity"] = match.group(1)
             result["data"]["port_identity"] = match.group(1)
 
+        # portState
         match = re.search(r"portState\s+(\w+)", pmc_output)
         if match:
             result["port_state"] = match.group(1)
             result["data"]["port_state"] = match.group(1)
 
+        # logMinDelayReqInterval
         match = re.search(r"logMinDelayReqInterval\s+(-?\d+)", pmc_output)
         if match:
             result["log_min_delay_req_interval"] = int(match.group(1))
             result["data"]["log_min_delay_req_interval"] = int(match.group(1))
 
+        # logSyncInterval
         match = re.search(r"logSyncInterval\s+(-?\d+)", pmc_output)
         if match:
             result["log_sync_interval"] = int(match.group(1))
             result["data"]["log_sync_interval"] = int(match.group(1))
 
+        # logAnnounceInterval
         match = re.search(r"logAnnounceInterval\s+(-?\d+)", pmc_output)
         if match:
             result["log_announce_interval"] = int(match.group(1))
             result["data"]["log_announce_interval"] = int(match.group(1))
 
+        # delayMechanism
         match = re.search(r"delayMechanism\s+(\d+)", pmc_output)
         if match:
             delay_mech = int(match.group(1))

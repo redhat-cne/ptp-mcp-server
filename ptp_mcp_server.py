@@ -166,7 +166,7 @@ class PTPMCPServer:
                 ),
                 Tool(
                     name="analyze_sync_status",
-                    description="Analyze PTP synchronization status and health",
+                    description="Analyze PTP synchronization status and health, including optional path delay analysis",
                     inputSchema={
                         "type": "object",
                         "properties": {
@@ -179,6 +179,11 @@ class PTPMCPServer:
                                 "type": "boolean",
                                 "default": True,
                                 "description": "Include BMCA state analysis"
+                            },
+                            "include_path_delay": {
+                                "type": "boolean",
+                                "default": False,
+                                "description": "Include network path delay and asymmetry analysis"
                             },
                             "kubeconfig": {
                                 "type": "string",

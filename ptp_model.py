@@ -34,6 +34,80 @@ class SyncStatus(Enum):
     FREERUN = "freerun"
     UNKNOWN = "unknown"
 
+class PortState(Enum):
+    """PTP Port States (IEEE 1588)"""
+    INITIALIZING = "INITIALIZING"
+    FAULTY = "FAULTY"
+    DISABLED = "DISABLED"
+    LISTENING = "LISTENING"
+    PRE_MASTER = "PRE_MASTER"
+    MASTER = "MASTER"
+    PASSIVE = "PASSIVE"
+    UNCALIBRATED = "UNCALIBRATED"
+    SLAVE = "SLAVE"
+
+class ServoState(Enum):
+    """Servo synchronization states"""
+    UNLOCKED = "s0"      # Not tracking, large offset
+    CLOCK_STEP = "s1"    # Applying large correction
+    LOCKED = "s2"        # Tracking with small corrections
+
+class DPLLState(Enum):
+    """DPLL (Digital Phase-Locked Loop) states"""
+    INVALID = 0
+    INITIALIZING = 1
+    FREERUN = 2
+    LOCKED = 3
+    LOCKED_HO = 4        # Locked with holdover capability
+    HOLDOVER = 5
+
+class GNSSFixQuality(Enum):
+    """GNSS fix quality levels"""
+    NO_FIX = 0
+    FIX_2D = 1
+    FIX_3D = 2
+    FIX_3D_HOLDOVER = 3  # 3D fix with holdover capability
+
+# Clock class descriptions per ITU-T G.8275.1
+CLOCK_CLASS_DESCRIPTIONS = {
+    # T-GM (Telecom Grandmaster) clock classes
+    6: "T-GM locked to PRTC (e.g. GNSS)",
+    7: "T-GM holdover, within holdover specification",
+    # T-BC (Telecom Boundary Clock) clock classes
+    135: "T-BC holdover, within holdover specification",
+    # T-GM holdover, out of holdover specification (by frequency reference quality)
+    140: "T-GM holdover, out of spec, traceable to PRC/PRS",
+    150: "T-GM holdover, out of spec, traceable to SSU-A/ST2",
+    160: "T-GM holdover, out of spec, Category 3 frequency reference",
+    # T-BC holdover, out of holdover specification
+    165: "T-BC holdover, out of holdover specification",
+    # Common
+    248: "Free-running, no valid time reference",
+    255: "Slave-only clock (T-TSC), does not act as master"
+}
+
+# Clock accuracy values (IEEE 1588)
+CLOCK_ACCURACY = {
+    0x20: "25ns",
+    0x21: "100ns",
+    0x22: "250ns",
+    0x23: "1us",
+    0x24: "2.5us",
+    0x25: "10us",
+    0x26: "25us",
+    0x27: "100us",
+    0x28: "250us",
+    0x29: "1ms",
+    0xFE: "Unknown"
+}
+
+# Offset thresholds by profile (nanoseconds)
+OFFSET_THRESHOLDS = {
+    "G.8275.1": {"max": 1500, "warning": 1000},      # FTS
+    "G.8275.2": {"max": 5000, "warning": 3000},      # PTS
+    "default": {"max": 100, "warning": 50}
+}
+
 @dataclass
 class PTPClock:
     """PTP Clock representation"""

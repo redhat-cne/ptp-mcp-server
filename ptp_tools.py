@@ -34,7 +34,7 @@ class PTPTools:
 
             with kubeconfig_from_base64(kubeconfig) as kubeconfig_path:
                 # Get raw configuration
-                config_data = await self.config_parser.get_ptp_configs(namespace, kubeconfig_path)
+                config_data = await self.config_parser.get_ptp_configs(namespace, kubeconfig_path=kubeconfig_path)
 
                 # Create structured configuration
                 ptp_config = self.model.create_ptp_configuration(config_data)
@@ -82,7 +82,7 @@ class PTPTools:
 
             with kubeconfig_from_base64(kubeconfig) as kubeconfig_path:
                 # Get logs
-                logs = await self.log_parser.get_ptp_logs(namespace, lines, since, kubeconfig_path)
+                logs = await self.log_parser.get_ptp_logs(namespace, lines, since, kubeconfig_path=kubeconfig_path)
 
                 # Extract structured information
                 gm_info = self.log_parser.extract_grandmaster_info(logs)
@@ -206,6 +206,7 @@ class PTPTools:
         try:
             include_offsets = arguments.get("include_offsets", True)
             include_bmca = arguments.get("include_bmca", True)
+            include_path_delay = arguments.get("include_path_delay", False)
             kubeconfig = arguments.get("kubeconfig")
 
             with kubeconfig_from_base64(kubeconfig) as kubeconfig_path:
@@ -241,6 +242,10 @@ class PTPTools:
                     bmca_role = self.model.analyze_bmca_state(ptp_config, logs)
                     result["bmca_role"] = bmca_role.value
 
+                if include_path_delay:
+                    # Analyze network path delay characteristics
+                    result["path_delay"] = self._analyze_path_delay(logs)
+
                 return result
 
         except Exception as e:
@@ -250,6 +255,51 @@ class PTPTools:
                 "error": str(e),
                 "sync_status": {"dpll_locked": False, "offset_in_range": False}
             }
+
+    def _analyze_path_delay(self, logs) -> Dict[str, Any]:
+        """Analyze network path delay characteristics from logs"""
+        delays = []
+        for log in logs:
+            if log.component == "phc2sys" and "delay" in log.parsed_data:
+                delays.append(log.parsed_data["delay"])
+
+        result = {
+            "mean_path_delay_ns": None,
+            "path_delay_variance": None,
+            "min_delay_ns": None,
+            "max_delay_ns": None,
+            "asymmetry_detected": False,
+            "delay_trend": "unknown",
+            "sample_count": len(delays)
+        }
+
+        if delays:
+            result["mean_path_delay_ns"] = sum(delays) / len(delays)
+            result["min_delay_ns"] = min(delays)
+            result["max_delay_ns"] = max(delays)
+
+            if len(delays) > 1:
+                mean = result["mean_path_delay_ns"]
+                variance = sum((d - mean) ** 2 for d in delays) / len(delays)
+                result["path_delay_variance"] = variance
+
+                # Check for asymmetry (large variance suggests asymmetry issues)
+                if variance > 10000:  # >100ns std dev
+                    result["asymmetry_detected"] = True
+
+                # Determine trend
+                if len(delays) >= 10:
+                    first_half = sum(delays[:len(delays)//2]) / (len(delays)//2)
+                    second_half = sum(delays[len(delays)//2:]) / (len(delays) - len(delays)//2)
+                    diff = second_half - first_half
+                    if abs(diff) < 10:
+                        result["delay_trend"] = "stable"
+                    elif diff > 0:
+                        result["delay_trend"] = "increasing"
+                    else:
+                        result["delay_trend"] = "decreasing"
+
+        return result
 
     async def get_clock_hierarchy(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """Get current clock hierarchy"""
@@ -264,16 +314,76 @@ class PTPTools:
                 config_data = await self.config_parser.get_ptp_configs(kubeconfig_path=kubeconfig_path)
                 ptp_config = self.model.create_ptp_configuration(config_data)
 
-                # Get clock hierarchy
+                # Get clock hierarchy from model
                 hierarchy = self.model.get_clock_hierarchy(ptp_config, logs)
 
-                # Add log-based hierarchy info
+                # Add log-based hierarchy info (grandmaster, parent clock, etc.)
                 log_hierarchy = self.log_parser.extract_clock_hierarchy(logs)
                 hierarchy.update(log_hierarchy)
 
+                # Try to get steps_removed from PMC CURRENT_DATA_SET query
+                try:
+                    pmc_result = await self.run_pmc_query({"command": "CURRENT_DATA_SET", "kubeconfig": kubeconfig})
+                    if pmc_result.get("success") and pmc_result.get("data"):
+                        steps = pmc_result["data"].get("steps_removed")
+                        if steps is not None:
+                            hierarchy["steps_removed"] = steps
+                except Exception as pmc_error:
+                    logger.debug(f"Could not get steps_removed from PMC: {pmc_error}")
+
+                # Build a clear hierarchy chain for display
+                hierarchy_chain = []
+
+                # 1. Grandmaster (top of hierarchy)
+                if hierarchy.get("grandmaster"):
+                    gm = hierarchy["grandmaster"]
+                    hierarchy_chain.append({
+                        "level": 1,
+                        "role": "Grandmaster",
+                        "identity": gm.get("identity"),
+                        "clock_class": gm.get("clock_class"),
+                        "clock_class_description": gm.get("clock_class_description"),
+                        "priority1": gm.get("priority1"),
+                        "priority2": gm.get("priority2"),
+                        "status": gm.get("status", "active")
+                    })
+
+                # 2. Parent/Boundary Clock (intermediate - if different from GM)
+                if hierarchy.get("parent_clock"):
+                    parent = hierarchy["parent_clock"]
+                    gm_id = (hierarchy.get("grandmaster") or {}).get("identity", "")
+                    # Only add if parent is different from grandmaster
+                    if parent.get("identity") and parent.get("identity") != gm_id:
+                        hierarchy_chain.append({
+                            "level": 2,
+                            "role": "Parent Clock (Boundary Clock)",
+                            "identity": parent.get("identity"),
+                            "port_identity": parent.get("port_identity"),
+                            "description": parent.get("description"),
+                            "status": "active"
+                        })
+
+                # 3. Current node (this OpenShift node)
+                hierarchy_chain.append({
+                    "level": 3,
+                    "role": "Current Node (Ordinary Clock)",
+                    "clock_type": hierarchy.get("current_clock", {}).get("type", "OC"),
+                    "domain": hierarchy.get("current_clock", {}).get("domain"),
+                    "clock_class": hierarchy.get("current_clock", {}).get("clock_class"),
+                    "priority1": hierarchy.get("current_clock", {}).get("priorities", {}).get("priority1"),
+                    "priority2": hierarchy.get("current_clock", {}).get("priorities", {}).get("priority2"),
+                    "status": "slave"
+                })
+
                 result = {
                     "success": True,
-                    "hierarchy": hierarchy
+                    "hierarchy_chain": hierarchy_chain,
+                    "grandmaster": hierarchy.get("grandmaster"),
+                    "parent_clock": hierarchy.get("parent_clock"),
+                    "current_clock": hierarchy.get("current_clock"),
+                    "steps_removed": hierarchy.get("steps_removed"),
+                    "summary": self._build_hierarchy_summary(hierarchy_chain, hierarchy.get("steps_removed")),
+                    "visibility_note": hierarchy.get("visibility_note")
                 }
 
                 if include_ports:
@@ -302,6 +412,30 @@ class PTPTools:
                 "error": str(e),
                 "hierarchy": {}
             }
+
+    def _build_hierarchy_summary(self, hierarchy_chain: list, steps_removed: int = None) -> str:
+        """Build a human-readable summary of the clock hierarchy"""
+        if not hierarchy_chain:
+            return "No clock hierarchy information available"
+
+        lines = ["PTP Clock Hierarchy:"]
+
+        for i, clock in enumerate(hierarchy_chain):
+            indent = "  " * (clock.get("level", 1) - 1)
+            arrow = "→ " if i > 0 else ""
+
+            if clock["role"] == "Grandmaster":
+                desc = clock.get("clock_class_description", "")
+                lines.append(f"{indent}{arrow}Grandmaster: {clock.get('identity')} (class {clock.get('clock_class')}: {desc})")
+            elif "Parent" in clock["role"]:
+                lines.append(f"{indent}{arrow}Parent BC: {clock.get('identity')} (port {clock.get('port_identity')})")
+            else:
+                lines.append(f"{indent}{arrow}This Node: {clock.get('clock_type')} on domain {clock.get('domain')} (slave)")
+
+        if steps_removed is not None:
+            lines.append(f"\nSteps removed from grandmaster: {steps_removed}")
+
+        return "\n".join(lines)
 
     async def check_ptp_health(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """Comprehensive PTP health check"""
@@ -499,9 +633,13 @@ class PTPTools:
             kubeconfig = arguments.get("kubeconfig")
 
             with kubeconfig_from_base64(kubeconfig) as kubeconfig_path:
+                # Get logs
                 logs = await self.log_parser.get_ptp_logs(namespace, lines, kubeconfig_path=kubeconfig_path)
+
+                # Extract servo statistics
                 servo_stats = self.log_parser.extract_servo_statistics(logs)
 
+                # Generate recommendations based on analysis
                 recommendations = []
                 if servo_stats["stability"] == "unstable":
                     recommendations.append("Check for multiple daemon instances modifying the same clock")
@@ -587,7 +725,7 @@ class PTPTools:
                 holdover_data = self.log_parser.extract_holdover_events(logs)
 
                 try:
-                    config_data = await self.config_parser.get_ptp_configs(namespace, kubeconfig_path)
+                    config_data = await self.config_parser.get_ptp_configs(namespace, kubeconfig_path=kubeconfig_path)
                     ptp_config = self.model.create_ptp_configuration(config_data)
                     holdover_timeout = ptp_config.thresholds.get("holdOverTimeout", 0)
                 except Exception as e:
@@ -645,7 +783,10 @@ class PTPTools:
             kubeconfig = arguments.get("kubeconfig")
 
             with kubeconfig_from_base64(kubeconfig) as kubeconfig_path:
+                # Get logs
                 logs = await self.log_parser.get_ptp_logs(namespace, lines, kubeconfig_path=kubeconfig_path)
+
+                # Extract port transitions from logs
                 port_data = self.log_parser.extract_port_transitions(logs)
 
                 if interface:
@@ -660,6 +801,7 @@ class PTPTools:
                     "port_identity": None
                 }
 
+                # Get current port state from PMC (more reliable than logs for current state)
                 try:
                     pmc_result = await self.run_pmc_query({"command": "PORT_DATA_SET", "namespace": namespace, "kubeconfig": kubeconfig})
                     if pmc_result.get("success") and pmc_result.get("data"):
@@ -673,8 +815,9 @@ class PTPTools:
                     logger.debug(f"Could not get port state from PMC: {pmc_error}")
 
                 if include_history:
-                    result["transitions"] = port_data["transitions"][-50:]
+                    result["transitions"] = port_data["transitions"][-50:]  # Last 50 transitions
 
+                # Add explanation if no transitions found
                 if not port_data["transitions"]:
                     result["note"] = "No port state transitions found in recent logs. This is normal for a stable PTP system where port state hasn't changed."
 
@@ -713,6 +856,7 @@ class PTPTools:
                 }
 
             with kubeconfig_from_base64(kubeconfig) as kubeconfig_path:
+                # Get pod name
                 pod_cmd = build_oc_command(kubeconfig_path)
                 pod_cmd.extend([
                     "get", "pods", "-n", namespace,
@@ -725,6 +869,7 @@ class PTPTools:
 
                 pod_name = pod_result.stdout.strip()
 
+                # Execute PMC command
                 pmc_cmd = build_oc_command(kubeconfig_path)
                 pmc_cmd.extend([
                     "exec", "-n", namespace, pod_name,
@@ -736,6 +881,7 @@ class PTPTools:
             if pmc_result.returncode != 0:
                 raise Exception(f"PMC command failed: {pmc_result.stderr}")
 
+            # Parse PMC output
             parsed_data = self.log_parser.parse_pmc_output(pmc_result.stdout)
 
             return {
