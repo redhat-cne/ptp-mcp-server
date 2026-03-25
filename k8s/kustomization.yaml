@@ -1,0 +1,15 @@
+# Kustomization for PTP MCP Server deployment
+# Deploy with: oc apply -k k8s/
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: openshift-ptp
+
+resources:
+- rbac.yaml
+- deployment.yaml
+- service.yaml
+
+images:
+- name: quay.io/redhat-cne/ptp-mcp-server
+  newTag: latest

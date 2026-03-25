@@ -1,11 +1,26 @@
 #!/usr/bin/env python3
 """
 PTP MCP Server - Model Context Protocol server for OpenShift PTP monitoring
+
+Supports two transport modes:
+- stdio: For local MCP clients (Claude Code, Claude Desktop)
+- http: For OpenShift Lightspeed integration via streamableHTTP
+
+Usage:
+  python ptp_mcp_server.py              # stdio mode (default)
+  python ptp_mcp_server.py --http       # HTTP mode on default port 8080
+  python ptp_mcp_server.py --http --port 9000  # HTTP mode on custom port
+
+Environment variables:
+  PTP_MCP_PORT: Port for HTTP server (default: 8080)
+  PTP_MCP_HOST: Host to bind to (default: 0.0.0.0)
 """
 
+import argparse
 import asyncio
 import json
 import logging
+import os
 import subprocess
 import sys
 from typing import Any, Dict, List, Optional
@@ -40,7 +55,7 @@ logger = logging.getLogger(__name__)
 
 class PTPMCPServer:
     """MCP Server for PTP monitoring and analysis"""
-    
+
     def __init__(self):
         self.server = Server("ptp-mcp-server")
         self.ptp_config_parser = PTPConfigParser()
@@ -48,13 +63,13 @@ class PTPMCPServer:
         self.ptp_model = PTPModel()
         self.ptp_query_engine = PTPQueryEngine()
         self.ptp_tools = PTPTools()
-        
+
         # Register tools
         self._register_tools()
-    
+
     def _register_tools(self):
         """Register all PTP-related tools with the MCP server"""
-        
+
         @self.server.list_tools()
         async def handle_list_tools() -> ListToolsResult:
             """List all available PTP tools"""
@@ -215,10 +230,11 @@ class PTPMCPServer:
                 )
             ]
             return ListToolsResult(tools=tools)
-        
+
         @self.server.call_tool()
         async def handle_call_tool(name: str, arguments: Dict[str, Any]) -> CallToolResult:
             """Handle tool calls for PTP operations"""
+            logger.info(f"Tool call received: {name} with args: {arguments}")
             try:
                 if name == "get_ptp_config":
                     result = await self.ptp_tools.get_ptp_config(arguments)
@@ -238,37 +254,140 @@ class PTPMCPServer:
                     result = await self.ptp_tools.query_ptp(arguments)
                 else:
                     raise ValueError(f"Unknown tool: {name}")
-                
+
+                logger.info(f"Tool {name} completed successfully")
                 return CallToolResult(
                     content=[TextContent(type="text", text=json.dumps(result, indent=2))]
                 )
-                
+
             except Exception as e:
                 logger.error(f"Error in tool {name}: {str(e)}")
                 return CallToolResult(
                     content=[TextContent(type="text", text=f"Error: {str(e)}")]
                 )
-    
-    async def run(self):
-        """Run the MCP server"""
+
+    def _get_init_options(self) -> InitializationOptions:
+        """Get initialization options for the MCP server"""
+        return InitializationOptions(
+            server_name="ptp-mcp-server",
+            server_version="1.0.0",
+            capabilities=self.server.get_capabilities(
+                notification_options=NotificationOptions(),
+                experimental_capabilities={},
+            ),
+        )
+
+    async def run_stdio(self):
+        """Run the MCP server in stdio mode (for local MCP clients)"""
+        logger.info("Starting PTP MCP Server in stdio mode")
         async with stdio_server() as (read_stream, write_stream):
             await self.server.run(
                 read_stream,
                 write_stream,
-                InitializationOptions(
-                    server_name="ptp-mcp-server",
-                    server_version="1.0.0",
-                    capabilities=self.server.get_capabilities(
-                        notification_options=NotificationOptions(),
-                        experimental_capabilities={},
-                    ),
-                ),
+                self._get_init_options(),
             )
+
+    async def run_http(self, host: str = "0.0.0.0", port: int = 8080):
+        """Run the MCP server in HTTP mode (for OpenShift Lightspeed)"""
+        try:
+            from mcp.server.sse import SseServerTransport
+            from starlette.responses import JSONResponse
+            import uvicorn
+        except ImportError as e:
+            logger.error(f"HTTP mode requires additional dependencies: {e}")
+            logger.error("Install with: pip install starlette uvicorn sse-starlette")
+            sys.exit(1)
+
+        # Create SSE transport
+        # The endpoint parameter is where clients POST messages back
+        sse_transport = SseServerTransport("/mcp/messages")
+
+        # Store reference to self for use in ASGI app
+        mcp_server = self.server
+        init_options = self._get_init_options()
+
+        async def app(scope, receive, send):
+            """Custom ASGI application for MCP server"""
+            path = scope.get("path", "")
+            method = scope.get("method", "")
+
+            if path == "/health" and method == "GET":
+                response = JSONResponse({"status": "healthy", "server": "ptp-mcp-server"})
+                await response(scope, receive, send)
+            elif path == "/ready" and method == "GET":
+                response = JSONResponse({"status": "ready", "server": "ptp-mcp-server"})
+                await response(scope, receive, send)
+            elif path == "/mcp" and method == "GET":
+                # SSE endpoint - connect_sse handles the response
+                logger.info(f"SSE connection from {scope.get('client', 'unknown')}")
+                async with sse_transport.connect_sse(scope, receive, send) as streams:
+                    await mcp_server.run(
+                        streams[0],
+                        streams[1],
+                        init_options,
+                    )
+            elif path == "/mcp/messages" and method == "POST":
+                # POST messages - handle_post_message handles the response
+                logger.info(f"POST message from {scope.get('client', 'unknown')}")
+                await sse_transport.handle_post_message(scope, receive, send)
+            else:
+                # 404 Not Found
+                response = JSONResponse({"error": "Not found"}, status_code=404)
+                await response(scope, receive, send)
+
+        logger.info(f"Starting PTP MCP Server in HTTP mode on {host}:{port}")
+        logger.info(f"MCP endpoint: http://{host}:{port}/mcp")
+        logger.info(f"Health check: http://{host}:{port}/health")
+
+        config = uvicorn.Config(app, host=host, port=port, log_level="info")
+        server = uvicorn.Server(config)
+        await server.serve()
+
+
+def parse_args():
+    """Parse command line arguments"""
+    parser = argparse.ArgumentParser(
+        description="PTP MCP Server for OpenShift PTP monitoring"
+    )
+    parser.add_argument(
+        "--http",
+        action="store_true",
+        help="Run in HTTP mode for OpenShift Lightspeed (default: stdio mode)"
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help="Port for HTTP server (default: 8080, or PTP_MCP_PORT env var)"
+    )
+    parser.add_argument(
+        "--host",
+        type=str,
+        default=None,
+        help="Host to bind HTTP server (default: 0.0.0.0, or PTP_MCP_HOST env var)"
+    )
+    return parser.parse_args()
+
 
 async def main():
     """Main entry point"""
+    args = parse_args()
     server = PTPMCPServer()
-    await server.run()
+
+    if args.http:
+        # HTTP mode for OpenShift Lightspeed
+        host = args.host or os.environ.get("PTP_MCP_HOST", "0.0.0.0")
+        port_str = os.environ.get("PTP_MCP_PORT", "8080")
+        try:
+            port = args.port or int(port_str)
+        except ValueError:
+            logger.error(f"Invalid PTP_MCP_PORT value: {port_str}")
+            sys.exit(1)
+        await server.run_http(host=host, port=port)
+    else:
+        # stdio mode for local MCP clients
+        await server.run_stdio()
+
 
 if __name__ == "__main__":
-    asyncio.run(main()) 
+    asyncio.run(main())
