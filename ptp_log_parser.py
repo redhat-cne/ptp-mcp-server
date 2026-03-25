@@ -11,6 +11,8 @@ from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime, timedelta
 from dataclasses import dataclass
 
+from kube_utils import build_oc_command
+
 logger = logging.getLogger(__name__)
 
 @dataclass
@@ -42,37 +44,44 @@ class PTPLogParser:
             "go_log": r"I(\d{4})\s+(\d{2}:\d{2}:\d{2}\.\d{6})\s+(\d+)\s+([^:]+):(\d+)\]\s*(.+)"
         }
     
-    async def get_ptp_logs(self, namespace: str = None, lines: int = 1000, since: str = None) -> List[LogEntry]:
-        """Get PTP logs from OpenShift cluster"""
+    async def get_ptp_logs(self, namespace: str = None, lines: int = 1000, since: str = None, kubeconfig_path: str = None) -> List[LogEntry]:
+        """Get PTP logs from OpenShift cluster
+
+        Args:
+            namespace: Kubernetes namespace (default: openshift-ptp)
+            lines: Number of log lines to retrieve
+            since: Time since to get logs (e.g., '1h', '30m')
+            kubeconfig_path: Path to kubeconfig file (optional, uses default cluster if not provided)
+        """
         if namespace is None:
             namespace = self.namespace
-            
+
         try:
-            # Build oc command
-            cmd = [
-                "oc", "logs", f"ds/{self.daemon_name}",
+            cmd = build_oc_command(kubeconfig_path)
+            cmd.extend([
+                "logs", f"ds/{self.daemon_name}",
                 "-c", self.container_name,
                 "-n", namespace,
                 "--tail", str(lines)
-            ]
-            
+            ])
+
             if since:
                 cmd.extend(["--since", since])
-            
+
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
                 timeout=60
             )
-            
+
             if result.returncode != 0:
                 raise Exception(f"Failed to get PTP logs: {result.stderr}")
-            
+
             # Parse log lines
             log_lines = result.stdout.strip().split('\n')
             return [self._parse_log_line(line) for line in log_lines if line.strip()]
-            
+
         except subprocess.TimeoutExpired:
             raise Exception("Timeout getting PTP logs")
         except Exception as e:
