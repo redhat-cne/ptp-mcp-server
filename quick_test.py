@@ -132,10 +132,10 @@ async def quick_test():
         result = await tools.get_clock_hierarchy({})
         if result["success"]:
             print("✅ Clock Hierarchy API: PASSED")
-            hierarchy = result.get("hierarchy", {})
-            current_clock = hierarchy.get("current_clock", {})
+            current_clock = result.get("current_clock", {})
             print(f"   - Clock Type: {current_clock.get('type', 'unknown')}")
             print(f"   - Domain: {current_clock.get('domain', 'unknown')}")
+            print(f"   - Summary: {result.get('summary', 'N/A')[:80]}")
             tests_passed += 1
         else:
             print(f"❌ Clock Hierarchy API: FAILED - {result.get('error', 'Unknown error')}")
