@@ -215,6 +215,21 @@ async def quick_test():
     except Exception as e:
         print(f"❌ Profile-filtered log analysis: FAILED - {str(e)}")
 
+    # Test 10: Servo Stability API
+    print("\n🔟 Testing Servo Stability API...")
+    total_tests += 1
+    try:
+        result = await tools.analyze_servo_stability({})
+        if result["success"]:
+            print("✅ Servo Stability API: PASSED")
+            print(f"   - Stability: {result.get('stability', 'unknown')}")
+            print(f"   - Servo State: {result.get('servo_state', 'unknown')}")
+            tests_passed += 1
+        else:
+            print(f"❌ Servo Stability API: FAILED - {result.get('error', 'Unknown error')}")
+    except Exception as e:
+        print(f"❌ Servo Stability API: FAILED - {str(e)}")
+
     # Summary
     print("\n" + "=" * 50)
     print("📊 TEST SUMMARY")
@@ -235,7 +250,8 @@ async def quick_test():
         print("   • query_ptp() - Natural language interface")
         print("   • run_pmc_query() - PMC management queries")
         print("   • get_ptp_runtime_configs() - Profile to config file mapping")
-        
+        print("   • analyze_servo_stability() - Servo controller analysis")
+
         print("\n🔧 Next Steps:")
         print("   1. Start the MCP server: python ptp_mcp_server.py")
         print("   2. Integrate with your agent using the above endpoints")
@@ -296,4 +312,4 @@ if __name__ == "__main__":
         print("Running sample data test instead...")
         test_sample_data()
     
-    print("\n✅ Quick test complete!") 
+    print("\n✅ Quick test complete!")
