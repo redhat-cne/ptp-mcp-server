@@ -491,6 +491,50 @@ class PTPTools:
                 "suggestions": self.query_engine.suggest_queries()
             }
 
+    async def analyze_servo_stability(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Analyze PI servo controller behavior and stability"""
+        try:
+            namespace = arguments.get("namespace", "openshift-ptp")
+            lines = arguments.get("lines", 1000)
+            kubeconfig = arguments.get("kubeconfig")
+
+            with kubeconfig_from_base64(kubeconfig) as kubeconfig_path:
+                logs = await self.log_parser.get_ptp_logs(namespace, lines, kubeconfig_path=kubeconfig_path)
+                servo_stats = self.log_parser.extract_servo_statistics(logs)
+
+                recommendations = []
+                if servo_stats["stability"] == "unstable":
+                    recommendations.append("Check for multiple daemon instances modifying the same clock")
+                    recommendations.append("Review power management settings (C-states)")
+                    recommendations.append("Consider adjusting step_threshold in ptp4lConf")
+                elif servo_stats["stability"] == "degraded":
+                    recommendations.append("Monitor for continued degradation")
+                    recommendations.append("Check grandmaster stability")
+
+                if servo_stats["clockcheck_events"]:
+                    recommendations.append(f"Detected {len(servo_stats['clockcheck_events'])} clockcheck events - investigate frequency changes")
+
+                result = {
+                    "success": True,
+                    "servo_state": servo_stats["servo_state"],
+                    "stability": servo_stats["stability"],
+                    "offset_stats": servo_stats["offset_stats"],
+                    "frequency_stats": servo_stats["frequency_stats"],
+                    "clockcheck_events": servo_stats["clockcheck_events"],
+                    "recommendations": recommendations
+                }
+                if "components" in servo_stats:
+                    result["components"] = servo_stats["components"]
+                return result
+
+        except Exception as e:
+            logger.error(f"Error analyzing servo stability: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e),
+                "stability": "unknown"
+            }
+
     async def run_pmc_query(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """Execute PMC (PTP Management Client) queries for real-time data"""
         try:

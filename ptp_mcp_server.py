@@ -261,6 +261,29 @@ class PTPMCPServer:
                     }
                 ),
                 Tool(
+                    name="analyze_servo_stability",
+                    description="Analyze PI servo controller behavior, detect clockcheck events, and assess stability",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "namespace": {
+                                "type": "string",
+                                "default": "openshift-ptp",
+                                "description": "Kubernetes namespace"
+                            },
+                            "lines": {
+                                "type": "integer",
+                                "default": 1000,
+                                "description": "Number of log lines to analyze"
+                            },
+                            "kubeconfig": {
+                                "type": "string",
+                                "description": "MUST be base64-encoded kubeconfig content. To target a different cluster, the kubeconfig file must first be base64 encoded using: cat kubeconfig.yaml | base64 -w0. Then pass the resulting base64 string here. Optional - if not provided, uses the default cluster."
+                            }
+                        }
+                    }
+                ),
+                Tool(
                     name="run_pmc_query",
                     description="Execute PMC (PTP Management Client) queries for real-time PTP data",
                     inputSchema={
@@ -314,6 +337,8 @@ class PTPMCPServer:
                     result = await self.ptp_tools.check_ptp_health(arguments)
                 elif name == "query_ptp":
                     result = await self.ptp_tools.query_ptp(arguments)
+                elif name == "analyze_servo_stability":
+                    result = await self.ptp_tools.analyze_servo_stability(arguments)
                 elif name == "run_pmc_query":
                     result = await self.ptp_tools.run_pmc_query(arguments)
                 else:
