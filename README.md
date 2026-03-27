@@ -266,6 +266,7 @@ asyncio.run(analyze_logs())
 | `check_ptp_health` | Comprehensive health check |
 | `query_ptp` | Natural language interface |
 | `analyze_servo_stability` | PI servo controller analysis |
+| `analyze_holdover` | Holdover event analysis |
 | `get_gnss_status` | GNSS receiver status |
 | `get_port_status` | PTP port state tracking |
 | `run_pmc_query` | Execute PMC commands |
