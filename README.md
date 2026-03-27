@@ -265,6 +265,7 @@ asyncio.run(analyze_logs())
 | `get_clock_hierarchy` | Get clock hierarchy |
 | `check_ptp_health` | Comprehensive health check |
 | `query_ptp` | Natural language interface |
+| `run_pmc_query` | Execute PMC commands |
 
 ### Deployment Files
 

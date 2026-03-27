@@ -5,6 +5,7 @@ PTP Tools - Implementation of MCP tools for PTP monitoring
 
 import json
 import logging
+import subprocess
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
 
@@ -12,7 +13,7 @@ from ptp_config_parser import PTPConfigParser
 from ptp_log_parser import PTPLogParser
 from ptp_model import PTPModel
 from ptp_query_engine import PTPQueryEngine
-from kube_utils import kubeconfig_from_base64
+from kube_utils import kubeconfig_from_base64, build_oc_command
 
 logger = logging.getLogger(__name__)
 
@@ -488,4 +489,75 @@ class PTPTools:
                 "error": str(e),
                 "question": arguments.get("question", ""),
                 "suggestions": self.query_engine.suggest_queries()
+            }
+
+    async def run_pmc_query(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute PMC (PTP Management Client) queries for real-time data"""
+        try:
+            namespace = arguments.get("namespace", "openshift-ptp")
+            command = arguments.get("command", "PARENT_DATA_SET")
+            config_file = arguments.get("config_file", "/var/run/ptp4l.0.config")
+            kubeconfig = arguments.get("kubeconfig")
+
+            valid_commands = [
+                "PARENT_DATA_SET",
+                "DEFAULT_DATA_SET",
+                "CURRENT_DATA_SET",
+                "TIME_PROPERTIES_DATA_SET",
+                "PORT_DATA_SET",
+                "GRANDMASTER_SETTINGS_NP"
+            ]
+
+            if command not in valid_commands:
+                return {
+                    "success": False,
+                    "error": f"Invalid PMC command. Valid commands: {valid_commands}",
+                    "data": {}
+                }
+
+            with kubeconfig_from_base64(kubeconfig) as kubeconfig_path:
+                pod_cmd = build_oc_command(kubeconfig_path)
+                pod_cmd.extend([
+                    "get", "pods", "-n", namespace,
+                    "-l", "app=linuxptp-daemon",
+                    "-o", "jsonpath={.items[0].metadata.name}"
+                ])
+                pod_result = subprocess.run(pod_cmd, capture_output=True, text=True, timeout=30)
+                if pod_result.returncode != 0:
+                    raise Exception(f"Failed to get pod name: {pod_result.stderr}")
+
+                pod_name = pod_result.stdout.strip()
+
+                pmc_cmd = build_oc_command(kubeconfig_path)
+                pmc_cmd.extend([
+                    "exec", "-n", namespace, pod_name,
+                    "-c", "linuxptp-daemon-container", "--",
+                    "pmc", "-u", "-b", "0", "-f", config_file, f"GET {command}"
+                ])
+                pmc_result = subprocess.run(pmc_cmd, capture_output=True, text=True, timeout=30)
+
+            if pmc_result.returncode != 0:
+                raise Exception(f"PMC command failed: {pmc_result.stderr}")
+
+            parsed_data = self.log_parser.parse_pmc_output(pmc_result.stdout)
+
+            return {
+                "success": True,
+                "command": command,
+                "raw_output": pmc_result.stdout,
+                **parsed_data
+            }
+
+        except subprocess.TimeoutExpired:
+            return {
+                "success": False,
+                "error": "PMC query timed out",
+                "data": {}
+            }
+        except Exception as e:
+            logger.error(f"Error running PMC query: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e),
+                "data": {}
             }
