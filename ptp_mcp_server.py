@@ -465,6 +465,28 @@ class PTPMCPServer:
                         }
                     }
                 ),
+                Tool(
+                    name="get_ptp_hardware_info",
+                    description="Get PTP hardware capabilities for network interfaces including timestamping support, PHC devices, driver info, and PTP readiness assessment",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "namespace": {
+                                "type": "string",
+                                "default": "openshift-ptp",
+                                "description": "Kubernetes namespace"
+                            },
+                            "interface": {
+                                "type": "string",
+                                "description": "Specific interface to check (optional, checks all physical interfaces if omitted)"
+                            },
+                            "kubeconfig": {
+                                "type": "string",
+                                "description": "MUST be base64-encoded kubeconfig content. To target a different cluster, the kubeconfig file must first be base64 encoded using: cat kubeconfig.yaml | base64 -w0. Then pass the resulting base64 string here. Optional - if not provided, uses the default cluster."
+                            }
+                        }
+                    }
+                ),
             ]
             return ListToolsResult(tools=tools)
 
@@ -504,6 +526,8 @@ class PTPMCPServer:
                     result = await self.ptp_tools.run_pmc_query(arguments)
                 elif name == "get_ptp_runtime_configs":
                     result = await self.ptp_tools.get_ptp_runtime_configs(arguments)
+                elif name == "get_ptp_hardware_info":
+                    result = await self.ptp_tools.get_ptp_hardware_info(arguments)
                 else:
                     raise ValueError(f"Unknown tool: {name}")
 
