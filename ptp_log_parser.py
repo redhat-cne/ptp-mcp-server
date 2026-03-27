@@ -56,6 +56,8 @@ class PTPLogParser:
             "clockcheck": r"clockcheck:\s*(.+)",
             "servo_state": r"offset\s+(-?\d+)\s+(s[0-2])\s+freq\s+(-?\d+)",
             "port_state_change": r"port\s+(\d+)\s*(?:\([^)]+\))?:\s+(\w+)\s+to\s+(\w+)",
+            "gnss_fix": r"(?:fix|locked|acquired)",
+            "gnss_loss": r"(?:lost|no fix|unlocked)",
         }
 
     async def get_ptp_logs(self, namespace: str = None, lines: int = 1000, since: str = None, kubeconfig_path: str = None) -> List[LogEntry]:
@@ -650,6 +652,54 @@ class PTPLogParser:
                         result["ports"][port_num]["current_state"] = to_state
                         result["ports"][port_num]["transition_count"] += 1
                         result["ports"][port_num]["last_transition"] = log.timestamp.isoformat() if log.timestamp else None
+
+        return result
+
+    def extract_gnss_status(self, logs: List[LogEntry]) -> Dict[str, Any]:
+        """Extract detailed GNSS status from logs"""
+        result = {
+            "gnss_available": False,
+            "gnss_status": None,
+            "fix_quality": None,
+            "nmea_delay_ns": None,
+            "last_valid_fix": None,
+            "signal_stability": "unknown",
+            "loss_events": []
+        }
+
+        gnss_status_values = []
+
+        for log in logs:
+            if log.component in ["ts2phc", "gnss"]:
+                if "gnss_status" in log.parsed_data:
+                    status = log.parsed_data["gnss_status"]
+                    gnss_status_values.append(status)
+                    result["gnss_status"] = status
+                    if status > 0:
+                        result["gnss_available"] = True
+                        result["last_valid_fix"] = log.timestamp.isoformat() if log.timestamp else None
+                        result["fix_quality"] = status
+
+                if "nmea_delay_ns" in log.parsed_data:
+                    result["nmea_delay_ns"] = log.parsed_data["nmea_delay_ns"]
+
+                if re.search(self.extended_patterns["gnss_loss"], log.message.lower()):
+                    result["loss_events"].append({
+                        "timestamp": log.timestamp.isoformat() if log.timestamp else None,
+                        "message": log.message
+                    })
+
+            if "source_lost" in log.parsed_data:
+                if log.parsed_data["source_lost"]:
+                    result["gnss_available"] = False
+
+        if gnss_status_values:
+            if all(s >= 2 for s in gnss_status_values[-10:]):
+                result["signal_stability"] = "good"
+            elif any(s == 0 for s in gnss_status_values[-10:]):
+                result["signal_stability"] = "poor"
+            else:
+                result["signal_stability"] = "moderate"
 
         return result
 

@@ -284,6 +284,24 @@ class PTPMCPServer:
                     }
                 ),
                 Tool(
+                    name="get_gnss_status",
+                    description="Get detailed GNSS receiver status and quality metrics",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "namespace": {
+                                "type": "string",
+                                "default": "openshift-ptp",
+                                "description": "Kubernetes namespace"
+                            },
+                            "kubeconfig": {
+                                "type": "string",
+                                "description": "MUST be base64-encoded kubeconfig content. To target a different cluster, the kubeconfig file must first be base64 encoded using: cat kubeconfig.yaml | base64 -w0. Then pass the resulting base64 string here. Optional - if not provided, uses the default cluster."
+                            }
+                        }
+                    }
+                ),
+                Tool(
                     name="get_port_status",
                     description="Get PTP port states and transition history",
                     inputSchema={
@@ -366,6 +384,8 @@ class PTPMCPServer:
                     result = await self.ptp_tools.query_ptp(arguments)
                 elif name == "analyze_servo_stability":
                     result = await self.ptp_tools.analyze_servo_stability(arguments)
+                elif name == "get_gnss_status":
+                    result = await self.ptp_tools.get_gnss_status(arguments)
                 elif name == "get_port_status":
                     result = await self.ptp_tools.get_port_status(arguments)
                 elif name == "run_pmc_query":
