@@ -404,6 +404,24 @@ class PTPMCPServer:
                     }
                 ),
                 Tool(
+                    name="map_hardware_to_config",
+                    description="Map PTP configurations to actual hardware capabilities, identifying misconfigurations like PTP profiles assigned to interfaces without hardware timestamping support",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "namespace": {
+                                "type": "string",
+                                "default": "openshift-ptp",
+                                "description": "Kubernetes namespace"
+                            },
+                            "kubeconfig": {
+                                "type": "string",
+                                "description": "MUST be base64-encoded kubeconfig content. To target a different cluster, the kubeconfig file must first be base64 encoded using: cat kubeconfig.yaml | base64 -w0. Then pass the resulting base64 string here. Optional - if not provided, uses the default cluster."
+                            }
+                        }
+                    }
+                ),
+                Tool(
                     name="get_ptp_hardware_info",
                     description="Get PTP hardware capabilities for network interfaces including timestamping support, PHC devices, driver info, and PTP readiness assessment",
                     inputSchema={
@@ -464,6 +482,8 @@ class PTPMCPServer:
                     result = await self.ptp_tools.run_pmc_query(arguments)
                 elif name == "get_ptp_hardware_info":
                     result = await self.ptp_tools.get_ptp_hardware_info(arguments)
+                elif name == "map_hardware_to_config":
+                    result = await self.ptp_tools.map_hardware_to_config(arguments)
                 else:
                     raise ValueError(f"Unknown tool: {name}")
 

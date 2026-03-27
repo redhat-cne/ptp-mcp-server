@@ -249,6 +249,22 @@ async def quick_test():
     except Exception as e:
         print(f"❌ Hardware Capability API: FAILED - {str(e)}")
 
+    # Test 16: Hardware-to-Config Mapping API
+    print("\n1️⃣6️⃣ Testing Hardware-to-Config Mapping API...")
+    total_tests += 1
+    try:
+        result = await tools.map_hardware_to_config({})
+        if result["success"]:
+            print("✅ Hardware-to-Config Mapping API: PASSED")
+            print(f"   - Mappings: {len(result.get('mappings', []))}")
+            print(f"   - Issues: {len(result.get('issues', []))}")
+            print(f"   - Summary: {result.get('summary', 'N/A')[:80]}")
+            tests_passed += 1
+        else:
+            print(f"❌ Hardware-to-Config Mapping API: FAILED - {result.get('error', 'Unknown error')}")
+    except Exception as e:
+        print(f"❌ Hardware-to-Config Mapping API: FAILED - {str(e)}")
+
     # Summary
     print("\n" + "=" * 50)
     print("📊 TEST SUMMARY")
@@ -274,6 +290,7 @@ async def quick_test():
         print("   • analyze_holdover() - Holdover event analysis")
         print("   • analyze_frequency_drift() - Frequency drift analysis")
         print("   • get_ptp_hardware_info() - Hardware PTP capabilities")
+        print("   • map_hardware_to_config() - Hardware-to-config mapping")
         
         print("\n🔧 Next Steps:")
         print("   1. Start the MCP server: python ptp_mcp_server.py")
