@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from dataclasses import dataclass
 
 from kube_utils import build_oc_command
+from ptp_model import CLOCK_CLASS_DESCRIPTIONS
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,17 @@ class PTPLogParser:
             "gm": r"GM\[(\d+)\]:\[([^\]]+)\]\s*(.+)",
             "go_log": r"I(\d{4})\s+(\d{2}:\d{2}:\d{2}\.\d{6})\s+(\d+)\s+([^:]+):(\d+)\]\s*(.+)"
         }
-    
+
+        # Extended patterns for advanced diagnostics
+        self.extended_patterns = {
+            "pmc_grandmaster_identity": r"grandmasterIdentity\s+([a-f0-9.]+)",
+            "pmc_clock_class": r"gm\.ClockClass\s+(\d+)",
+            "pmc_clock_accuracy": r"gm\.ClockAccuracy\s+(0x[0-9a-fA-F]+)",
+            "pmc_priority1": r"grandmasterPriority1\s+(\d+)",
+            "pmc_priority2": r"grandmasterPriority2\s+(\d+)",
+            "pmc_parent_port": r"parentPortIdentity\s+([a-f0-9.-]+)",
+        }
+
     async def get_ptp_logs(self, namespace: str = None, lines: int = 1000, since: str = None, kubeconfig_path: str = None) -> List[LogEntry]:
         """Get PTP logs from OpenShift cluster
 
@@ -478,4 +489,90 @@ class PTPLogParser:
                     "last_seen": log.timestamp
                 }
         
-        return hierarchy 
+        return hierarchy
+
+    def _get_clock_class_description(self, clock_class: int) -> str:
+        """Get human-readable description of clock class per ITU-T G.8275.1"""
+        return CLOCK_CLASS_DESCRIPTIONS.get(clock_class, f"Clock class {clock_class}")
+
+    def parse_pmc_output(self, pmc_output: str) -> Dict[str, Any]:
+        """Parse PMC command output into structured data"""
+        result = {"data": {}}
+
+        match = re.search(self.extended_patterns["pmc_grandmaster_identity"], pmc_output)
+        if match:
+            result["grandmaster_identity"] = match.group(1)
+            result["data"]["grandmaster_identity"] = match.group(1)
+
+        match = re.search(self.extended_patterns["pmc_clock_class"], pmc_output)
+        if match:
+            result["grandmaster_clock_class"] = int(match.group(1))
+            result["data"]["grandmaster_clock_class"] = int(match.group(1))
+
+        match = re.search(self.extended_patterns["pmc_clock_accuracy"], pmc_output)
+        if match:
+            result["grandmaster_clock_accuracy"] = match.group(1)
+            result["data"]["grandmaster_clock_accuracy"] = match.group(1)
+
+        match = re.search(self.extended_patterns["pmc_priority1"], pmc_output)
+        if match:
+            result["grandmaster_priority1"] = int(match.group(1))
+            result["data"]["grandmaster_priority1"] = int(match.group(1))
+
+        match = re.search(self.extended_patterns["pmc_priority2"], pmc_output)
+        if match:
+            result["grandmaster_priority2"] = int(match.group(1))
+            result["data"]["grandmaster_priority2"] = int(match.group(1))
+
+        match = re.search(self.extended_patterns["pmc_parent_port"], pmc_output)
+        if match:
+            result["parent_port_identity"] = match.group(1)
+            result["data"]["parent_port_identity"] = match.group(1)
+
+        match = re.search(r"stepsRemoved\s+(\d+)", pmc_output)
+        if match:
+            result["steps_removed"] = int(match.group(1))
+            result["data"]["steps_removed"] = int(match.group(1))
+
+        match = re.search(r"offsetFromMaster\s+(-?[\d.]+)", pmc_output)
+        if match:
+            result["offset_from_master"] = float(match.group(1))
+            result["data"]["offset_from_master"] = float(match.group(1))
+
+        match = re.search(r"meanPathDelay\s+(-?[\d.]+)", pmc_output)
+        if match:
+            result["mean_path_delay"] = float(match.group(1))
+            result["data"]["mean_path_delay"] = float(match.group(1))
+
+        match = re.search(r"portIdentity\s+([a-f0-9.-]+)", pmc_output)
+        if match:
+            result["port_identity"] = match.group(1)
+            result["data"]["port_identity"] = match.group(1)
+
+        match = re.search(r"portState\s+(\w+)", pmc_output)
+        if match:
+            result["port_state"] = match.group(1)
+            result["data"]["port_state"] = match.group(1)
+
+        match = re.search(r"logMinDelayReqInterval\s+(-?\d+)", pmc_output)
+        if match:
+            result["log_min_delay_req_interval"] = int(match.group(1))
+            result["data"]["log_min_delay_req_interval"] = int(match.group(1))
+
+        match = re.search(r"logSyncInterval\s+(-?\d+)", pmc_output)
+        if match:
+            result["log_sync_interval"] = int(match.group(1))
+            result["data"]["log_sync_interval"] = int(match.group(1))
+
+        match = re.search(r"logAnnounceInterval\s+(-?\d+)", pmc_output)
+        if match:
+            result["log_announce_interval"] = int(match.group(1))
+            result["data"]["log_announce_interval"] = int(match.group(1))
+
+        match = re.search(r"delayMechanism\s+(\d+)", pmc_output)
+        if match:
+            delay_mech = int(match.group(1))
+            result["delay_mechanism"] = delay_mech
+            result["data"]["delay_mechanism"] = "E2E" if delay_mech == 1 else "P2P" if delay_mech == 2 else str(delay_mech)
+
+        return result 

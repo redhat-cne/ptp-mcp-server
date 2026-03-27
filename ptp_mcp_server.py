@@ -259,7 +259,36 @@ class PTPMCPServer:
                         },
                         "required": ["question"]
                     }
-                )
+                ),
+                Tool(
+                    name="run_pmc_query",
+                    description="Execute PMC (PTP Management Client) queries for real-time PTP data",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "command": {
+                                "type": "string",
+                                "enum": ["PARENT_DATA_SET", "DEFAULT_DATA_SET", "CURRENT_DATA_SET", "TIME_PROPERTIES_DATA_SET", "PORT_DATA_SET", "GRANDMASTER_SETTINGS_NP"],
+                                "default": "PARENT_DATA_SET",
+                                "description": "PMC command to execute"
+                            },
+                            "namespace": {
+                                "type": "string",
+                                "default": "openshift-ptp",
+                                "description": "Kubernetes namespace"
+                            },
+                            "config_file": {
+                                "type": "string",
+                                "default": "/var/run/ptp4l.0.config",
+                                "description": "Path to ptp4l config file in the pod"
+                            },
+                            "kubeconfig": {
+                                "type": "string",
+                                "description": "MUST be base64-encoded kubeconfig content. To target a different cluster, the kubeconfig file must first be base64 encoded using: cat kubeconfig.yaml | base64 -w0. Then pass the resulting base64 string here. Optional - if not provided, uses the default cluster."
+                            }
+                        }
+                    }
+                ),
             ]
             return ListToolsResult(tools=tools)
 
@@ -285,6 +314,8 @@ class PTPMCPServer:
                     result = await self.ptp_tools.check_ptp_health(arguments)
                 elif name == "query_ptp":
                     result = await self.ptp_tools.query_ptp(arguments)
+                elif name == "run_pmc_query":
+                    result = await self.ptp_tools.run_pmc_query(arguments)
                 else:
                     raise ValueError(f"Unknown tool: {name}")
 

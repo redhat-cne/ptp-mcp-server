@@ -75,6 +75,24 @@ class PTPConfiguration:
     sync_intervals: Dict[str, int]
     thresholds: Dict[str, Any]
 
+# Clock class descriptions per ITU-T G.8275.1
+CLOCK_CLASS_DESCRIPTIONS = {
+    # T-GM (Telecom Grandmaster) clock classes
+    6: "T-GM locked to PRTC (e.g. GNSS)",
+    7: "T-GM holdover, within holdover specification",
+    # T-BC (Telecom Boundary Clock) clock classes
+    135: "T-BC holdover, within holdover specification",
+    # T-GM holdover, out of holdover specification (by frequency reference quality)
+    140: "T-GM holdover, out of spec, traceable to PRC/PRS",
+    150: "T-GM holdover, out of spec, traceable to SSU-A/ST2",
+    160: "T-GM holdover, out of spec, Category 3 frequency reference",
+    # T-BC holdover, out of holdover specification
+    165: "T-BC holdover, out of holdover specification",
+    # Common
+    248: "Free-running, no valid time reference",
+    255: "Slave-only clock (T-TSC), does not act as master"
+}
+
 class PTPModel:
     """Contextual model for PTP understanding and analysis"""
     

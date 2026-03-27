@@ -142,6 +142,22 @@ async def quick_test():
     except Exception as e:
         print(f"❌ Clock Hierarchy API: FAILED - {str(e)}")
     
+    # Test 9: PMC Query API
+    print("\n9️⃣  Testing PMC Query API...")
+    total_tests += 1
+    try:
+        result = await tools.run_pmc_query({"command": "CURRENT_DATA_SET"})
+        if result["success"]:
+            print("✅ PMC Query API: PASSED")
+            print(f"   - Command: {result.get('command', 'N/A')}")
+            data = result.get("data", {})
+            print(f"   - Steps Removed: {data.get('steps_removed', 'N/A')}")
+            tests_passed += 1
+        else:
+            print(f"❌ PMC Query API: FAILED - {result.get('error', 'Unknown error')}")
+    except Exception as e:
+        print(f"❌ PMC Query API: FAILED - {str(e)}")
+
     # Summary
     print("\n" + "=" * 50)
     print("📊 TEST SUMMARY")
@@ -160,6 +176,7 @@ async def quick_test():
         print("   • get_clock_hierarchy() - Get clock hierarchy")
         print("   • check_ptp_health() - Comprehensive health check")
         print("   • query_ptp() - Natural language interface")
+        print("   • run_pmc_query() - PMC management queries")
         
         print("\n🔧 Next Steps:")
         print("   1. Start the MCP server: python ptp_mcp_server.py")
