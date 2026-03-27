@@ -60,6 +60,10 @@ class PTPLogParser:
             "gnss_loss": r"(?:lost|no fix|unlocked)",
             "holdover_entry": r"(?:entering|on)\s+holdover",
             "holdover_exit": r"(?:exiting|leaving)\s+holdover",
+            "announce_timeout": r"announce timeout",
+            "clock_class_change": r"clockClass\s+changed?\s+(?:from\s+)?(\d+)\s+(?:to\s+)?(\d+)?",
+            "path_delay": r"delay\s+(-?\d+)",
+            "frequency_change": r"freq\s+(-?\d+)",
         }
 
     async def get_ptp_logs(self, namespace: str = None, lines: int = 1000, since: str = None, kubeconfig_path: str = None) -> List[LogEntry]:
@@ -654,6 +658,68 @@ class PTPLogParser:
                         result["ports"][port_num]["current_state"] = to_state
                         result["ports"][port_num]["transition_count"] += 1
                         result["ports"][port_num]["last_transition"] = log.timestamp.isoformat() if log.timestamp else None
+
+        return result
+
+    def extract_frequency_trend(self, logs: List[LogEntry], window_minutes: int = 60) -> Dict[str, Any]:
+        """Extract frequency adjustment trend from logs"""
+        result = {
+            "current_frequency_ppb": None,
+            "drift_rate_ppb_per_hour": None,
+            "trend": "unknown",
+            "sudden_changes": [],
+            "samples": []
+        }
+
+        # Collect all phc2sys frequency samples first
+        all_freq_samples = []
+        for log in logs:
+            if log.component == "phc2sys" and "frequency" in log.parsed_data and log.timestamp:
+                all_freq_samples.append({
+                    "timestamp": log.timestamp,
+                    "frequency": log.parsed_data["frequency"]
+                })
+
+        # Filter to the requested time window using the latest sample as reference
+        if all_freq_samples:
+            latest_ts = all_freq_samples[-1]["timestamp"]
+            cutoff = latest_ts - timedelta(minutes=window_minutes)
+            freq_samples = [s for s in all_freq_samples if s["timestamp"] >= cutoff]
+        else:
+            freq_samples = []
+
+        if not freq_samples:
+            return result
+
+        result["current_frequency_ppb"] = freq_samples[-1]["frequency"]
+        result["samples"] = [{"time": s["timestamp"].isoformat(), "freq": s["frequency"]} for s in freq_samples[-20:]]
+
+        for i in range(1, len(freq_samples)):
+            delta = abs(freq_samples[i]["frequency"] - freq_samples[i-1]["frequency"])
+            if delta > 1000:
+                result["sudden_changes"].append({
+                    "timestamp": freq_samples[i]["timestamp"].isoformat() if freq_samples[i]["timestamp"] else None,
+                    "delta": delta,
+                    "from_freq": freq_samples[i-1]["frequency"],
+                    "to_freq": freq_samples[i]["frequency"]
+                })
+
+        if len(freq_samples) >= 10:
+            early_samples = freq_samples[:max(1, len(freq_samples)//10)]
+            late_samples = freq_samples[-max(1, len(freq_samples)//10):]
+            early_avg = sum(s["frequency"] for s in early_samples) / len(early_samples)
+            late_avg = sum(s["frequency"] for s in late_samples) / len(late_samples)
+
+            if early_samples[0]["timestamp"] and late_samples[-1]["timestamp"]:
+                time_span = (late_samples[-1]["timestamp"] - early_samples[0]["timestamp"]).total_seconds() / 3600
+                if time_span > 0:
+                    result["drift_rate_ppb_per_hour"] = (late_avg - early_avg) / time_span
+                    if abs(result["drift_rate_ppb_per_hour"]) < 100:
+                        result["trend"] = "stable"
+                    elif result["drift_rate_ppb_per_hour"] > 0:
+                        result["trend"] = "increasing"
+                    else:
+                        result["trend"] = "decreasing"
 
         return result
 
