@@ -53,6 +53,8 @@ class PTPLogParser:
             "pmc_priority1": r"grandmasterPriority1\s+(\d+)",
             "pmc_priority2": r"grandmasterPriority2\s+(\d+)",
             "pmc_parent_port": r"parentPortIdentity\s+([a-f0-9.-]+)",
+            "clockcheck": r"clockcheck:\s*(.+)",
+            "servo_state": r"offset\s+(-?\d+)\s+(s[0-2])\s+freq\s+(-?\d+)",
         }
 
     async def get_ptp_logs(self, namespace: str = None, lines: int = 1000, since: str = None, kubeconfig_path: str = None) -> List[LogEntry]:
@@ -490,6 +492,127 @@ class PTPLogParser:
                 }
         
         return hierarchy
+
+    def _compute_offset_stats(self, offsets: List[int]) -> Dict[str, Any]:
+        """Compute offset statistics from a list of offset values"""
+        stats = {"mean": None, "std_dev": None, "max": None, "min": None, "count": 0}
+        if not offsets:
+            return stats
+        stats["count"] = len(offsets)
+        stats["mean"] = sum(offsets) / len(offsets)
+        stats["max"] = max(offsets)
+        stats["min"] = min(offsets)
+        if len(offsets) > 1:
+            mean = stats["mean"]
+            variance = sum((x - mean) ** 2 for x in offsets) / len(offsets)
+            stats["std_dev"] = variance ** 0.5
+        return stats
+
+    def _compute_frequency_stats(self, frequencies: List[int]) -> Dict[str, Any]:
+        """Compute frequency statistics from a list of frequency values"""
+        stats = {"mean": None, "current": None, "trend": "unknown"}
+        if not frequencies:
+            return stats
+        stats["mean"] = sum(frequencies) / len(frequencies)
+        stats["current"] = frequencies[-1]
+        if len(frequencies) >= 10:
+            half = len(frequencies) // 2
+            first_half_avg = sum(frequencies[:half]) / half
+            second_half_avg = sum(frequencies[half:]) / (len(frequencies) - half)
+            diff = second_half_avg - first_half_avg
+            if abs(diff) < 100:
+                stats["trend"] = "stable"
+            elif diff > 0:
+                stats["trend"] = "increasing"
+            else:
+                stats["trend"] = "decreasing"
+        return stats
+
+    def _determine_stability(self, offset_stats: Dict[str, Any], clockcheck_count: int) -> str:
+        """Determine stability rating from offset stats and clockcheck event count"""
+        if offset_stats["std_dev"] is None:
+            return "unknown"
+        if offset_stats["std_dev"] < 50 and clockcheck_count == 0:
+            return "stable"
+        elif offset_stats["std_dev"] < 200 or clockcheck_count <= 2:
+            return "degraded"
+        return "unstable"
+
+    def extract_servo_statistics(self, logs: List[LogEntry]) -> Dict[str, Any]:
+        """Extract servo performance statistics from ptp4l and phc2sys logs"""
+        component_data = {}
+        clockcheck_events = []
+
+        for log in logs:
+            if log.component not in ("ptp4l", "phc2sys"):
+                continue
+
+            data = component_data.setdefault(log.component, {
+                "offsets": [], "frequencies": [], "servo_states": []
+            })
+            if "offset" in log.parsed_data:
+                data["offsets"].append(log.parsed_data["offset"])
+            if "frequency" in log.parsed_data:
+                data["frequencies"].append(log.parsed_data["frequency"])
+            if "state" in log.parsed_data:
+                data["servo_states"].append(log.parsed_data["state"])
+
+            # Check for clockcheck events from any component
+            if "clockcheck" in log.message.lower():
+                match = re.search(self.extended_patterns["clockcheck"], log.message)
+                if match:
+                    clockcheck_events.append({
+                        "timestamp": log.timestamp.isoformat() if log.timestamp else None,
+                        "component": log.component,
+                        "message": match.group(1),
+                        "offset_at_event": log.parsed_data.get("offset")
+                    })
+
+        # Build per-component stats with ptp4l listed first
+        components = {}
+        for comp in ("ptp4l", "phc2sys"):
+            data = component_data.get(comp)
+            if data is None:
+                continue
+            offset_stats = self._compute_offset_stats(data["offsets"])
+            components[comp] = {
+                "servo_state": data["servo_states"][-1] if data["servo_states"] else "unknown",
+                "offset_stats": offset_stats,
+                "frequency_stats": self._compute_frequency_stats(data["frequencies"]),
+                "stability": self._determine_stability(offset_stats, len(clockcheck_events)),
+            }
+
+        # Overall servo state: prefer ptp4l, fall back to phc2sys
+        overall_servo_state = "unknown"
+        for comp in ("ptp4l", "phc2sys"):
+            if comp in components and components[comp]["servo_state"] != "unknown":
+                overall_servo_state = components[comp]["servo_state"]
+                break
+
+        # Overall stability: use ptp4l if available, else phc2sys
+        overall_stability = "unknown"
+        for comp in ("ptp4l", "phc2sys"):
+            if comp in components:
+                overall_stability = components[comp]["stability"]
+                break
+
+        stats = {
+            "servo_state": overall_servo_state,
+            "clockcheck_events": clockcheck_events,
+            "stability": overall_stability,
+            "components": components,
+        }
+
+        # Preserve top-level offset_stats/frequency_stats from ptp4l (preferred) or phc2sys
+        primary = components.get("ptp4l", components.get("phc2sys"))
+        if primary:
+            stats["offset_stats"] = primary["offset_stats"]
+            stats["frequency_stats"] = primary["frequency_stats"]
+        else:
+            stats["offset_stats"] = {"mean": None, "std_dev": None, "max": None, "min": None, "count": 0}
+            stats["frequency_stats"] = {"mean": None, "current": None, "trend": "unknown"}
+
+        return stats
 
     def _get_clock_class_description(self, clock_class: int) -> str:
         """Get human-readable description of clock class per ITU-T G.8275.1"""
