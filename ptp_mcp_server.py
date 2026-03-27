@@ -404,6 +404,33 @@ class PTPMCPServer:
                     }
                 ),
                 Tool(
+                    name="get_ptp_metrics",
+                    description="Fetch Prometheus metrics from PTP daemon pods (port 9091), parse and filter by PTP-specific labels (offset, frequency, clock_state, interface_role), and compute summary statistics",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "namespace": {
+                                "type": "string",
+                                "default": "openshift-ptp",
+                                "description": "Kubernetes namespace"
+                            },
+                            "filter": {
+                                "type": "string",
+                                "description": "Filter metrics by name or label value (e.g., 'offset', 'clock_state', an interface name)"
+                            },
+                            "include_summary": {
+                                "type": "boolean",
+                                "default": True,
+                                "description": "Include summary statistics (min/max/avg) per metric"
+                            },
+                            "kubeconfig": {
+                                "type": "string",
+                                "description": "MUST be base64-encoded kubeconfig content. To target a different cluster, the kubeconfig file must first be base64 encoded using: cat kubeconfig.yaml | base64 -w0. Then pass the resulting base64 string here. Optional - if not provided, uses the default cluster."
+                            }
+                        }
+                    }
+                ),
+                Tool(
                     name="map_hardware_to_config",
                     description="Map PTP configurations to actual hardware capabilities, identifying misconfigurations like PTP profiles assigned to interfaces without hardware timestamping support",
                     inputSchema={
@@ -484,6 +511,8 @@ class PTPMCPServer:
                     result = await self.ptp_tools.get_ptp_hardware_info(arguments)
                 elif name == "map_hardware_to_config":
                     result = await self.ptp_tools.map_hardware_to_config(arguments)
+                elif name == "get_ptp_metrics":
+                    result = await self.ptp_tools.get_ptp_metrics(arguments)
                 else:
                     raise ValueError(f"Unknown tool: {name}")
 

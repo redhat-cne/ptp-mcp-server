@@ -273,6 +273,7 @@ asyncio.run(analyze_logs())
 | `run_pmc_query` | Execute PMC commands |
 | `get_ptp_hardware_info` | NIC PTP capability detection |
 | `map_hardware_to_config` | Hardware-to-config mapping |
+| `get_ptp_metrics` | Prometheus metrics collection |
 
 ### Deployment Files
 

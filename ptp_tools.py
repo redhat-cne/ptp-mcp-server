@@ -1343,7 +1343,7 @@ class PTPTools:
                 continue
 
             # Parse metric lines: metric_name{label="value",...} value
-            match = re.match(r'(\w+)(\{[^}]*\})?\s+([\d.eE+\-]+(?:nan)?)', line, re.IGNORECASE)
+            match = re.match(r'(\w+)(\{[^}]*\})?\s+([\d.eE+\-]+|[+-]?inf|nan)', line, re.IGNORECASE)
             if match:
                 name = match.group(1)
                 labels_str = match.group(2)

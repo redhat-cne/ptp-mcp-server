@@ -265,6 +265,21 @@ async def quick_test():
     except Exception as e:
         print(f"❌ Hardware-to-Config Mapping API: FAILED - {str(e)}")
 
+    # Test 17: Prometheus Metrics API
+    print("\n1️⃣7️⃣ Testing Prometheus Metrics API...")
+    total_tests += 1
+    try:
+        result = await tools.get_ptp_metrics({})
+        if result["success"]:
+            print("✅ Prometheus Metrics API: PASSED")
+            print(f"   - Total Scraped: {result.get('total_metrics_scraped', 0)}")
+            print(f"   - PTP Metrics: {result.get('ptp_metrics_count', 0)}")
+            tests_passed += 1
+        else:
+            print(f"❌ Prometheus Metrics API: FAILED - {result.get('error', 'Unknown error')}")
+    except Exception as e:
+        print(f"❌ Prometheus Metrics API: FAILED - {str(e)}")
+
     # Summary
     print("\n" + "=" * 50)
     print("📊 TEST SUMMARY")
@@ -291,6 +306,7 @@ async def quick_test():
         print("   • analyze_frequency_drift() - Frequency drift analysis")
         print("   • get_ptp_hardware_info() - Hardware PTP capabilities")
         print("   • map_hardware_to_config() - Hardware-to-config mapping")
+        print("   • get_ptp_metrics() - Prometheus metrics collection")
         
         print("\n🔧 Next Steps:")
         print("   1. Start the MCP server: python ptp_mcp_server.py")
