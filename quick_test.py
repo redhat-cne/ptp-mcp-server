@@ -233,6 +233,22 @@ async def quick_test():
     except Exception as e:
         print(f"❌ Frequency Drift API: FAILED - {str(e)}")
 
+    # Test 15: Hardware Capability API
+    print("\n1️⃣5️⃣ Testing Hardware Capability API...")
+    total_tests += 1
+    try:
+        result = await tools.get_ptp_hardware_info({})
+        if result["success"]:
+            print("✅ Hardware Capability API: PASSED")
+            print(f"   - Total Interfaces: {result.get('total_interfaces', 0)}")
+            print(f"   - PTP Capable: {result.get('ptp_capable_count', 0)}")
+            print(f"   - HW Timestamping: {result.get('hw_timestamping_count', 0)}")
+            tests_passed += 1
+        else:
+            print(f"❌ Hardware Capability API: FAILED - {result.get('error', 'Unknown error')}")
+    except Exception as e:
+        print(f"❌ Hardware Capability API: FAILED - {str(e)}")
+
     # Summary
     print("\n" + "=" * 50)
     print("📊 TEST SUMMARY")
@@ -257,6 +273,7 @@ async def quick_test():
         print("   • get_gnss_status() - GNSS receiver status")
         print("   • analyze_holdover() - Holdover event analysis")
         print("   • analyze_frequency_drift() - Frequency drift analysis")
+        print("   • get_ptp_hardware_info() - Hardware PTP capabilities")
         
         print("\n🔧 Next Steps:")
         print("   1. Start the MCP server: python ptp_mcp_server.py")

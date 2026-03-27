@@ -5,6 +5,7 @@ PTP Tools - Implementation of MCP tools for PTP monitoring
 
 import json
 import logging
+import re
 import subprocess
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
@@ -904,3 +905,517 @@ class PTPTools:
                 "error": str(e),
                 "data": {}
             }
+
+    async def get_ptp_hardware_info(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Get PTP hardware capabilities for network interfaces in daemon pods"""
+        try:
+            namespace = arguments.get("namespace", "openshift-ptp")
+            interface = arguments.get("interface")
+            kubeconfig = arguments.get("kubeconfig")
+
+            with kubeconfig_from_base64(kubeconfig) as kubeconfig_path:
+                # Get pod name
+                pod_name = self._get_daemon_pod(namespace, kubeconfig_path)
+
+                # Get list of interfaces to check
+                if interface:
+                    interfaces = [interface]
+                else:
+                    interfaces = self._get_physical_interfaces(pod_name, namespace, kubeconfig_path)
+
+                results = []
+                for iface in interfaces:
+                    info = self._get_interface_ptp_info(pod_name, namespace, iface, kubeconfig_path)
+                    results.append(info)
+
+            return {
+                "success": True,
+                "interfaces": results,
+                "total_interfaces": len(results),
+                "ptp_capable_count": sum(1 for r in results if r.get("ptp_capable")),
+                "hw_timestamping_count": sum(1 for r in results if r.get("hw_timestamping"))
+            }
+
+        except Exception as e:
+            logger.error(f"Error getting PTP hardware info: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e),
+                "interfaces": []
+            }
+
+    def _get_daemon_pod(self, namespace: str, kubeconfig_path: str = None) -> str:
+        """Get the first linuxptp daemon pod name"""
+        cmd = build_oc_command(kubeconfig_path)
+        cmd.extend([
+            "get", "pods", "-n", namespace,
+            "-l", "app=linuxptp-daemon",
+            "-o", "jsonpath={.items[0].metadata.name}"
+        ])
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            raise Exception(f"Failed to get daemon pod: {result.stderr}")
+        return result.stdout.strip()
+
+    def _exec_in_pod(self, pod_name: str, namespace: str, command: List[str],
+                     kubeconfig_path: str = None, timeout: int = 15) -> str:
+        """Execute a command in the linuxptp daemon container"""
+        cmd = build_oc_command(kubeconfig_path)
+        cmd.extend([
+            "exec", "-n", namespace, pod_name,
+            "-c", "linuxptp-daemon-container", "--"
+        ])
+        cmd.extend(command)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        if result.returncode != 0:
+            raise Exception(f"Command failed: {result.stderr}")
+        return result.stdout
+
+    def _get_physical_interfaces(self, pod_name: str, namespace: str,
+                                 kubeconfig_path: str = None) -> List[str]:
+        """Get list of physical network interfaces (excluding virtual ones)"""
+        try:
+            output = self._exec_in_pod(
+                pod_name, namespace,
+                ["ip", "-o", "link", "show"],
+                kubeconfig_path
+            )
+            virtual_prefixes = ("lo", "docker", "veth", "br-", "virbr", "cni", "flannel", "ovs", "tun", "tap")
+            interfaces = []
+            for line in output.strip().split('\n'):
+                match = re.match(r'\d+:\s+(\S+?)(?:@\S+)?:', line)
+                if match:
+                    name = match.group(1)
+                    if not name.startswith(virtual_prefixes) and len(interfaces) < 20:
+                        interfaces.append(name)
+            return interfaces
+        except Exception:
+            return []
+
+    def _get_interface_ptp_info(self, pod_name: str, namespace: str, iface: str,
+                                kubeconfig_path: str = None) -> Dict[str, Any]:
+        """Get PTP-specific hardware info for a single interface"""
+        info = {
+            "name": iface,
+            "ptp_capable": False,
+            "hw_timestamping": False,
+            "sw_timestamping": False,
+            "phc_device": None,
+            "driver": None,
+            "firmware_version": None,
+            "bus_info": None,
+            "speed": None,
+            "timestamping_capabilities": {},
+            "ptp_assessment": "unknown"
+        }
+
+        # Get timestamping capabilities via ethtool -T
+        try:
+            ts_output = self._exec_in_pod(
+                pod_name, namespace,
+                ["ethtool", "-T", iface],
+                kubeconfig_path
+            )
+            info.update(self._parse_ethtool_timestamping(ts_output))
+        except Exception as e:
+            info["timestamping_error"] = str(e)
+
+        # Get driver info via ethtool -i
+        try:
+            driver_output = self._exec_in_pod(
+                pod_name, namespace,
+                ["ethtool", "-i", iface],
+                kubeconfig_path
+            )
+            info.update(self._parse_ethtool_driver(driver_output))
+        except Exception:
+            pass
+
+        # Get link speed
+        try:
+            speed_output = self._exec_in_pod(
+                pod_name, namespace,
+                ["ethtool", iface],
+                kubeconfig_path
+            )
+            speed_match = re.search(r'Speed:\s*(\S+)', speed_output)
+            if speed_match:
+                info["speed"] = speed_match.group(1)
+        except Exception:
+            pass
+
+        # Assess PTP readiness
+        info["ptp_assessment"] = self._assess_ptp_readiness(info)
+
+        return info
+
+    def _parse_ethtool_timestamping(self, output: str) -> Dict[str, Any]:
+        """Parse ethtool -T output for timestamping capabilities"""
+        result = {
+            "ptp_capable": False,
+            "hw_timestamping": False,
+            "sw_timestamping": False,
+            "phc_device": None,
+            "timestamping_capabilities": {
+                "hardware_transmit": False,
+                "hardware_receive_all": False,
+                "hardware_receive_filter_ptp_v2": False,
+                "software_transmit": False,
+                "software_receive": False,
+            }
+        }
+
+        current_section = None
+        for line in output.split('\n'):
+            line_stripped = line.strip()
+
+            if "Capabilities:" in line:
+                current_section = "capabilities"
+                continue
+            elif "PTP Hardware Clock:" in line:
+                match = re.search(r'PTP Hardware Clock:\s*(\d+)', line)
+                if match:
+                    phc_index = int(match.group(1))
+                    result["phc_device"] = f"/dev/ptp{phc_index}"
+                    result["ptp_capable"] = True
+                current_section = None
+                continue
+
+            if current_section == "capabilities" and line_stripped:
+                cap_lower = line_stripped.lower()
+                if "hardware-transmit" in cap_lower:
+                    result["timestamping_capabilities"]["hardware_transmit"] = True
+                    result["hw_timestamping"] = True
+                elif "hardware-receive" in cap_lower:
+                    if "all" in cap_lower:
+                        result["timestamping_capabilities"]["hardware_receive_all"] = True
+                    if "ptp" in cap_lower and "v2" in cap_lower:
+                        result["timestamping_capabilities"]["hardware_receive_filter_ptp_v2"] = True
+                    result["hw_timestamping"] = True
+                elif "software-transmit" in cap_lower:
+                    result["timestamping_capabilities"]["software_transmit"] = True
+                    result["sw_timestamping"] = True
+                elif "software-receive" in cap_lower:
+                    result["timestamping_capabilities"]["software_receive"] = True
+                    result["sw_timestamping"] = True
+
+        return result
+
+    def _parse_ethtool_driver(self, output: str) -> Dict[str, Any]:
+        """Parse ethtool -i output for driver information"""
+        result = {}
+        for line in output.split('\n'):
+            if ':' in line:
+                key, _, value = line.partition(':')
+                key = key.strip().lower().replace(' ', '_')
+                value = value.strip()
+                if key == "driver":
+                    result["driver"] = value
+                elif key == "version":
+                    result["driver_version"] = value
+                elif key == "firmware-version":
+                    result["firmware_version"] = value
+                elif key == "bus-info":
+                    result["bus_info"] = value
+        return result
+
+    def _assess_ptp_readiness(self, info: Dict[str, Any]) -> str:
+        """Assess PTP readiness based on hardware capabilities"""
+        if info.get("hw_timestamping") and info.get("phc_device"):
+            caps = info.get("timestamping_capabilities", {})
+            if caps.get("hardware_transmit") and (caps.get("hardware_receive_all") or caps.get("hardware_receive_filter_ptp_v2")):
+                return "fully_capable"
+            return "partial_hw_support"
+        elif info.get("sw_timestamping"):
+            return "software_only"
+        elif info.get("ptp_capable"):
+            return "capable_no_hw_timestamps"
+        return "not_capable"
+
+    async def map_hardware_to_config(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Map PTP configurations to actual hardware capabilities and identify misconfigurations"""
+        try:
+            namespace = arguments.get("namespace", "openshift-ptp")
+            kubeconfig = arguments.get("kubeconfig")
+
+            # Get PTP configurations
+            config_data = await self.config_parser.get_ptp_configs(namespace, kubeconfig)
+            ptp_config = self.model.create_ptp_configuration(config_data)
+
+            # Extract configured interfaces from profiles
+            configured_interfaces = []
+            for profile in ptp_config.profiles:
+                ptp4l_conf = profile.get("ptp4lConf", {})
+                interfaces = ptp4l_conf.get("interfaces", {})
+                ptp4l_opts = profile.get("ptp4lOpts", "")
+
+                for iface_name, iface_config in interfaces.items():
+                    configured_interfaces.append({
+                        "name": iface_name,
+                        "profile": profile.get("name", "unknown"),
+                        "master_only": iface_config.get("masterOnly", False),
+                        "config": iface_config
+                    })
+
+                # Also check ptp4lOpts for -i flag interfaces
+                if "-i " in ptp4l_opts:
+                    for match in re.finditer(r'-i\s+(\S+)', ptp4l_opts):
+                        iface_name = match.group(1)
+                        if not any(ci["name"] == iface_name for ci in configured_interfaces):
+                            configured_interfaces.append({
+                                "name": iface_name,
+                                "profile": profile.get("name", "unknown"),
+                                "master_only": False,
+                                "config": {},
+                                "source": "ptp4lOpts"
+                            })
+
+            if not configured_interfaces:
+                return {
+                    "success": True,
+                    "mappings": [],
+                    "issues": ["No interfaces found in PTP configuration profiles"],
+                    "warnings": [],
+                    "summary": "No configured interfaces to map"
+                }
+
+            # Get hardware capabilities for each configured interface
+            with kubeconfig_from_base64(kubeconfig) as kubeconfig_path:
+                pod_name = self._get_daemon_pod(namespace, kubeconfig_path)
+
+                mappings = []
+                issues = []
+                warnings = []
+
+                for ci in configured_interfaces:
+                    iface_name = ci["name"]
+                    hw_info = self._get_interface_ptp_info(pod_name, namespace, iface_name, kubeconfig_path)
+
+                    mapping = {
+                        "interface": iface_name,
+                        "profile": ci["profile"],
+                        "master_only": ci["master_only"],
+                        "hardware": {
+                            "ptp_capable": hw_info.get("ptp_capable", False),
+                            "hw_timestamping": hw_info.get("hw_timestamping", False),
+                            "phc_device": hw_info.get("phc_device"),
+                            "driver": hw_info.get("driver"),
+                            "speed": hw_info.get("speed"),
+                            "ptp_assessment": hw_info.get("ptp_assessment", "unknown")
+                        },
+                        "status": "ok"
+                    }
+
+                    # Check for misconfigurations
+                    if not hw_info.get("ptp_capable", False):
+                        mapping["status"] = "error"
+                        issues.append(
+                            f"Interface '{iface_name}' (profile: {ci['profile']}) is configured "
+                            f"for PTP but does NOT have PTP hardware support"
+                        )
+                    elif not hw_info.get("hw_timestamping", False):
+                        mapping["status"] = "warning"
+                        warnings.append(
+                            f"Interface '{iface_name}' (profile: {ci['profile']}) has a PHC device "
+                            f"but lacks hardware timestamping — PTP will use software timestamps "
+                            f"with reduced accuracy"
+                        )
+                    elif hw_info.get("ptp_assessment") == "partial_hw_support":
+                        mapping["status"] = "warning"
+                        warnings.append(
+                            f"Interface '{iface_name}' (profile: {ci['profile']}) has partial "
+                            f"hardware timestamping support — check receive filter capabilities"
+                        )
+
+                    if hw_info.get("timestamping_error"):
+                        mapping["hardware"]["timestamping_error"] = hw_info["timestamping_error"]
+
+                    mappings.append(mapping)
+
+            error_count = sum(1 for m in mappings if m["status"] == "error")
+            warn_count = sum(1 for m in mappings if m["status"] == "warning")
+
+            summary = f"{len(mappings)} interface(s) mapped"
+            if error_count:
+                summary += f", {error_count} misconfiguration(s) found"
+            if warn_count:
+                summary += f", {warn_count} warning(s)"
+            if not error_count and not warn_count:
+                summary += ", all hardware capabilities verified"
+
+            return {
+                "success": True,
+                "mappings": mappings,
+                "issues": issues,
+                "warnings": warnings,
+                "summary": summary
+            }
+
+        except Exception as e:
+            logger.error(f"Error mapping hardware to config: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e),
+                "mappings": []
+            }
+
+    async def get_ptp_metrics(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Fetch and analyze Prometheus metrics from PTP daemon pods"""
+        try:
+            namespace = arguments.get("namespace", "openshift-ptp")
+            metric_filter = arguments.get("filter")
+            include_summary = arguments.get("include_summary", True)
+            kubeconfig = arguments.get("kubeconfig")
+
+            with kubeconfig_from_base64(kubeconfig) as kubeconfig_path:
+                pod_name = self._get_daemon_pod(namespace, kubeconfig_path)
+
+                # Fetch metrics from port 9091
+                raw_metrics = self._exec_in_pod(
+                    pod_name, namespace,
+                    ["curl", "-s", "--max-time", "5", "http://localhost:9091/metrics"],
+                    kubeconfig_path,
+                    timeout=20
+                )
+
+            # Parse Prometheus text format
+            metrics = self._parse_prometheus_metrics(raw_metrics)
+
+            # Filter to PTP-related metrics
+            ptp_metrics = [m for m in metrics if self._is_ptp_metric(m["name"])]
+
+            # Apply user filter if specified
+            if metric_filter:
+                filter_lower = metric_filter.lower()
+                ptp_metrics = [
+                    m for m in ptp_metrics
+                    if filter_lower in m["name"].lower() or
+                    any(filter_lower in str(v).lower() for v in m.get("labels", {}).values())
+                ]
+
+            result = {
+                "success": True,
+                "total_metrics_scraped": len(metrics),
+                "ptp_metrics_count": len(ptp_metrics),
+                "metrics": ptp_metrics
+            }
+
+            if include_summary and ptp_metrics:
+                result["summary"] = self._summarize_ptp_metrics(ptp_metrics)
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Error getting PTP metrics: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e),
+                "metrics": []
+            }
+
+    def _parse_prometheus_metrics(self, raw: str) -> List[Dict[str, Any]]:
+        """Parse Prometheus text exposition format into structured metrics"""
+        metrics = []
+        help_texts = {}
+        type_info = {}
+
+        for line in raw.strip().split('\n'):
+            line = line.strip()
+            if not line:
+                continue
+
+            # Parse HELP lines
+            if line.startswith("# HELP "):
+                parts = line[7:].split(' ', 1)
+                if len(parts) == 2:
+                    help_texts[parts[0]] = parts[1]
+                continue
+
+            # Parse TYPE lines
+            if line.startswith("# TYPE "):
+                parts = line[7:].split(' ', 1)
+                if len(parts) == 2:
+                    type_info[parts[0]] = parts[1]
+                continue
+
+            # Skip other comments
+            if line.startswith("#"):
+                continue
+
+            # Parse metric lines: metric_name{label="value",...} value
+            match = re.match(r'(\w+)(\{[^}]*\})?\s+([\d.eE+\-]+(?:nan)?)', line, re.IGNORECASE)
+            if match:
+                name = match.group(1)
+                labels_str = match.group(2)
+                value_str = match.group(3)
+
+                try:
+                    value = float(value_str)
+                except ValueError:
+                    continue
+
+                labels = {}
+                if labels_str:
+                    for label_match in re.finditer(r'(\w+)="([^"]*)"', labels_str):
+                        labels[label_match.group(1)] = label_match.group(2)
+
+                metrics.append({
+                    "name": name,
+                    "labels": labels,
+                    "value": value,
+                    "help": help_texts.get(name),
+                    "type": type_info.get(name)
+                })
+
+        return metrics
+
+    def _is_ptp_metric(self, name: str) -> bool:
+        """Check if a metric name is PTP-related"""
+        ptp_prefixes = (
+            "openshift_ptp_", "ptp4l_", "phc2sys_", "ts2phc_",
+            "clock_", "dpll_", "gnss_", "npu_",
+        )
+        ptp_keywords = (
+            "offset", "frequency", "delay", "clock_class",
+            "clock_state", "sync", "holdover", "servo",
+            "interface_role", "ptp",
+        )
+        name_lower = name.lower()
+        return (name_lower.startswith(ptp_prefixes) or
+                any(kw in name_lower for kw in ptp_keywords))
+
+    def _summarize_ptp_metrics(self, metrics: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Generate summary statistics from PTP metrics"""
+        summary = {
+            "metric_names": sorted(set(m["name"] for m in metrics)),
+            "by_metric": {}
+        }
+
+        # Group metrics by name
+        grouped = {}
+        for m in metrics:
+            grouped.setdefault(m["name"], []).append(m)
+
+        for name, group in grouped.items():
+            values = [m["value"] for m in group]
+            entry = {
+                "count": len(values),
+                "min": min(values),
+                "max": max(values),
+                "avg": sum(values) / len(values),
+            }
+
+            # Include labels from first sample for context
+            if group[0].get("labels"):
+                label_keys = list(group[0]["labels"].keys())
+                entry["label_keys"] = label_keys
+
+                # If there are interface_role or node labels, group by them
+                for key in ("interface_role", "node", "iface", "process"):
+                    distinct = set(m["labels"].get(key) for m in group if key in m.get("labels", {}))
+                    if distinct:
+                        entry[f"distinct_{key}s"] = sorted(distinct)
+
+            summary["by_metric"][name] = entry
+
+        return summary

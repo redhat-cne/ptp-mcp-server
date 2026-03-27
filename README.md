@@ -271,6 +271,7 @@ asyncio.run(analyze_logs())
 | `get_gnss_status` | GNSS receiver status |
 | `get_port_status` | PTP port state tracking |
 | `run_pmc_query` | Execute PMC commands |
+| `get_ptp_hardware_info` | NIC PTP capability detection |
 
 ### Deployment Files
 
