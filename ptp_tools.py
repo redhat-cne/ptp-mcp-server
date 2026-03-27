@@ -639,6 +639,32 @@ class PTPTools:
                 "stability": "unknown"
             }
 
+    async def get_gnss_status(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Get detailed GNSS receiver status and quality metrics"""
+        try:
+            namespace = arguments.get("namespace", "openshift-ptp")
+            lines = arguments.get("lines", 1000)
+            profile_name = arguments.get("profile_name")
+            kubeconfig = arguments.get("kubeconfig")
+
+            with kubeconfig_from_base64(kubeconfig) as kubeconfig_path:
+                config_tags = self._resolve_config_tags(profile_name, namespace, kubeconfig_path)
+                logs = await self.log_parser.get_ptp_logs(namespace, lines, kubeconfig_path=kubeconfig_path)
+                gnss_status = self.log_parser.extract_gnss_status(logs, config_tags)
+
+                return {
+                    "success": True,
+                    **gnss_status
+                }
+
+        except Exception as e:
+            logger.error(f"Error getting GNSS status: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e),
+                "gnss_available": False
+            }
+
     async def get_port_status(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """Get PTP port states and transition history"""
         try:
