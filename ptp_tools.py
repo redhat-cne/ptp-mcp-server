@@ -535,6 +535,46 @@ class PTPTools:
                 "stability": "unknown"
             }
 
+    async def analyze_frequency_drift(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Detect and trend frequency adjustments"""
+        try:
+            namespace = arguments.get("namespace", "openshift-ptp")
+            lines = arguments.get("lines", 1000)
+            window_minutes = arguments.get("window_minutes", 60)
+            kubeconfig = arguments.get("kubeconfig")
+
+            with kubeconfig_from_base64(kubeconfig) as kubeconfig_path:
+                logs = await self.log_parser.get_ptp_logs(namespace, lines, kubeconfig_path=kubeconfig_path)
+                freq_trend = self.log_parser.extract_frequency_trend(logs, window_minutes)
+
+                estimated_stability = "unknown"
+                if freq_trend["drift_rate_ppb_per_hour"] is not None:
+                    drift = abs(freq_trend["drift_rate_ppb_per_hour"])
+                    if drift < 100:
+                        estimated_stability = "good"
+                    elif drift < 1000:
+                        estimated_stability = "moderate"
+                    else:
+                        estimated_stability = "poor"
+
+                return {
+                    "success": True,
+                    "current_frequency_ppb": freq_trend["current_frequency_ppb"],
+                    "drift_rate_ppb_per_hour": freq_trend["drift_rate_ppb_per_hour"],
+                    "trend": freq_trend["trend"],
+                    "sudden_changes": freq_trend["sudden_changes"],
+                    "estimated_stability": estimated_stability,
+                    "recent_samples": freq_trend["samples"]
+                }
+
+        except Exception as e:
+            logger.error(f"Error analyzing frequency drift: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e),
+                "trend": "unknown"
+            }
+
     async def analyze_holdover(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """Track and analyze holdover behavior"""
         try:

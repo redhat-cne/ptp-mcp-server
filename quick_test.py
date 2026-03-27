@@ -218,6 +218,21 @@ async def quick_test():
     except Exception as e:
         print(f"❌ Holdover Analysis API: FAILED - {str(e)}")
 
+    # Test 14: Frequency Drift API
+    print("\n1️⃣4️⃣ Testing Frequency Drift API...")
+    total_tests += 1
+    try:
+        result = await tools.analyze_frequency_drift({})
+        if result["success"]:
+            print("✅ Frequency Drift API: PASSED")
+            print(f"   - Trend: {result.get('trend', 'unknown')}")
+            print(f"   - Estimated Stability: {result.get('estimated_stability', 'unknown')}")
+            tests_passed += 1
+        else:
+            print(f"❌ Frequency Drift API: FAILED - {result.get('error', 'Unknown error')}")
+    except Exception as e:
+        print(f"❌ Frequency Drift API: FAILED - {str(e)}")
+
     # Summary
     print("\n" + "=" * 50)
     print("📊 TEST SUMMARY")
@@ -241,6 +256,7 @@ async def quick_test():
         print("   • get_port_status() - Port state and transitions")
         print("   • get_gnss_status() - GNSS receiver status")
         print("   • analyze_holdover() - Holdover event analysis")
+        print("   • analyze_frequency_drift() - Frequency drift analysis")
         
         print("\n🔧 Next Steps:")
         print("   1. Start the MCP server: python ptp_mcp_server.py")

@@ -284,6 +284,29 @@ class PTPMCPServer:
                     }
                 ),
                 Tool(
+                    name="analyze_frequency_drift",
+                    description="Detect and trend frequency adjustments over time",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "namespace": {
+                                "type": "string",
+                                "default": "openshift-ptp",
+                                "description": "Kubernetes namespace"
+                            },
+                            "window_minutes": {
+                                "type": "integer",
+                                "default": 60,
+                                "description": "Time window in minutes for analysis"
+                            },
+                            "kubeconfig": {
+                                "type": "string",
+                                "description": "MUST be base64-encoded kubeconfig content. To target a different cluster, the kubeconfig file must first be base64 encoded using: cat kubeconfig.yaml | base64 -w0. Then pass the resulting base64 string here. Optional - if not provided, uses the default cluster."
+                            }
+                        }
+                    }
+                ),
+                Tool(
                     name="analyze_holdover",
                     description="Track and analyze holdover behavior and events",
                     inputSchema={
@@ -402,6 +425,8 @@ class PTPMCPServer:
                     result = await self.ptp_tools.query_ptp(arguments)
                 elif name == "analyze_servo_stability":
                     result = await self.ptp_tools.analyze_servo_stability(arguments)
+                elif name == "analyze_frequency_drift":
+                    result = await self.ptp_tools.analyze_frequency_drift(arguments)
                 elif name == "analyze_holdover":
                     result = await self.ptp_tools.analyze_holdover(arguments)
                 elif name == "get_gnss_status":
