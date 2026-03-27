@@ -173,6 +173,21 @@ async def quick_test():
     except Exception as e:
         print(f"❌ Servo Stability API: FAILED - {str(e)}")
 
+    # Test 11: Port Status API
+    print("\n1️⃣1️⃣ Testing Port Status API...")
+    total_tests += 1
+    try:
+        result = await tools.get_port_status({})
+        if result["success"]:
+            print("✅ Port Status API: PASSED")
+            print(f"   - Current Port State: {result.get('current_port_state', 'N/A')}")
+            print(f"   - Ports: {len(result.get('ports', {}))}")
+            tests_passed += 1
+        else:
+            print(f"❌ Port Status API: FAILED - {result.get('error', 'Unknown error')}")
+    except Exception as e:
+        print(f"❌ Port Status API: FAILED - {str(e)}")
+
     # Summary
     print("\n" + "=" * 50)
     print("📊 TEST SUMMARY")
@@ -193,6 +208,7 @@ async def quick_test():
         print("   • query_ptp() - Natural language interface")
         print("   • run_pmc_query() - PMC management queries")
         print("   • analyze_servo_stability() - Servo controller analysis")
+        print("   • get_port_status() - Port state and transitions")
         
         print("\n🔧 Next Steps:")
         print("   1. Start the MCP server: python ptp_mcp_server.py")

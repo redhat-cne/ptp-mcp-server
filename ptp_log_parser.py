@@ -55,6 +55,7 @@ class PTPLogParser:
             "pmc_parent_port": r"parentPortIdentity\s+([a-f0-9.-]+)",
             "clockcheck": r"clockcheck:\s*(.+)",
             "servo_state": r"offset\s+(-?\d+)\s+(s[0-2])\s+freq\s+(-?\d+)",
+            "port_state_change": r"port\s+(\d+)\s*(?:\([^)]+\))?:\s+(\w+)\s+to\s+(\w+)",
         }
 
     async def get_ptp_logs(self, namespace: str = None, lines: int = 1000, since: str = None, kubeconfig_path: str = None) -> List[LogEntry]:
@@ -613,6 +614,44 @@ class PTPLogParser:
             stats["frequency_stats"] = {"mean": None, "current": None, "trend": "unknown"}
 
         return stats
+
+    def extract_port_transitions(self, logs: List[LogEntry]) -> Dict[str, Any]:
+        """Extract port state transitions from logs"""
+        result = {
+            "ports": {},
+            "transitions": [],
+            "current_states": {}
+        }
+
+        for log in logs:
+            if log.component == "ptp4l":
+                match = re.search(self.extended_patterns["port_state_change"], log.message)
+                if match:
+                    port_num = match.group(1)
+                    from_state = match.group(2)
+                    to_state = match.group(3)
+
+                    transition = {
+                        "timestamp": log.timestamp.isoformat() if log.timestamp else None,
+                        "port": port_num,
+                        "from_state": from_state,
+                        "to_state": to_state
+                    }
+                    result["transitions"].append(transition)
+                    result["current_states"][port_num] = to_state
+
+                    if port_num not in result["ports"]:
+                        result["ports"][port_num] = {
+                            "current_state": to_state,
+                            "transition_count": 1,
+                            "last_transition": log.timestamp.isoformat() if log.timestamp else None
+                        }
+                    else:
+                        result["ports"][port_num]["current_state"] = to_state
+                        result["ports"][port_num]["transition_count"] += 1
+                        result["ports"][port_num]["last_transition"] = log.timestamp.isoformat() if log.timestamp else None
+
+        return result
 
     def _get_clock_class_description(self, clock_class: int) -> str:
         """Get human-readable description of clock class per ITU-T G.8275.1"""

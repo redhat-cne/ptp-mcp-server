@@ -535,6 +535,59 @@ class PTPTools:
                 "stability": "unknown"
             }
 
+    async def get_port_status(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Get PTP port states and transition history"""
+        try:
+            namespace = arguments.get("namespace", "openshift-ptp")
+            interface = arguments.get("interface")
+            include_history = arguments.get("include_history", True)
+            lines = arguments.get("lines", 1000)
+            kubeconfig = arguments.get("kubeconfig")
+
+            with kubeconfig_from_base64(kubeconfig) as kubeconfig_path:
+                logs = await self.log_parser.get_ptp_logs(namespace, lines, kubeconfig_path=kubeconfig_path)
+                port_data = self.log_parser.extract_port_transitions(logs)
+
+                if interface:
+                    filtered_transitions = [t for t in port_data["transitions"] if t.get("port") == interface]
+                    port_data["transitions"] = filtered_transitions
+
+                result = {
+                    "success": True,
+                    "ports": port_data["ports"],
+                    "current_states": port_data["current_states"],
+                    "current_port_state": None,
+                    "port_identity": None
+                }
+
+                try:
+                    pmc_result = await self.run_pmc_query({"command": "PORT_DATA_SET", "namespace": namespace, "kubeconfig": kubeconfig})
+                    if pmc_result.get("success") and pmc_result.get("data"):
+                        pmc_data = pmc_result["data"]
+                        result["current_port_state"] = pmc_data.get("port_state")
+                        result["port_identity"] = pmc_data.get("port_identity")
+                        result["delay_mechanism"] = pmc_data.get("delay_mechanism")
+                        result["log_sync_interval"] = pmc_data.get("log_sync_interval")
+                        result["log_announce_interval"] = pmc_data.get("log_announce_interval")
+                except Exception as pmc_error:
+                    logger.debug(f"Could not get port state from PMC: {pmc_error}")
+
+                if include_history:
+                    result["transitions"] = port_data["transitions"][-50:]
+
+                if not port_data["transitions"]:
+                    result["note"] = "No port state transitions found in recent logs. This is normal for a stable PTP system where port state hasn't changed."
+
+                return result
+
+        except Exception as e:
+            logger.error(f"Error getting port status: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e),
+                "ports": {}
+            }
+
     async def run_pmc_query(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """Execute PMC (PTP Management Client) queries for real-time data"""
         try:
