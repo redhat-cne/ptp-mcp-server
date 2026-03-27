@@ -58,6 +58,8 @@ class PTPLogParser:
             "port_state_change": r"port\s+(\d+)\s*(?:\([^)]+\))?:\s+(\w+)\s+to\s+(\w+)",
             "gnss_fix": r"(?:fix|locked|acquired)",
             "gnss_loss": r"(?:lost|no fix|unlocked)",
+            "holdover_entry": r"(?:entering|on)\s+holdover",
+            "holdover_exit": r"(?:exiting|leaving)\s+holdover",
         }
 
     async def get_ptp_logs(self, namespace: str = None, lines: int = 1000, since: str = None, kubeconfig_path: str = None) -> List[LogEntry]:
@@ -652,6 +654,49 @@ class PTPLogParser:
                         result["ports"][port_num]["current_state"] = to_state
                         result["ports"][port_num]["transition_count"] += 1
                         result["ports"][port_num]["last_transition"] = log.timestamp.isoformat() if log.timestamp else None
+
+        return result
+
+    def extract_holdover_events(self, logs: List[LogEntry]) -> Dict[str, Any]:
+        """Extract holdover events from logs"""
+        result = {
+            "in_holdover": False,
+            "holdover_events": [],
+            "current_holdover_duration_seconds": None,
+            "total_holdover_time_seconds": 0,
+            "clock_class_during_holdover": []
+        }
+
+        holdover_start = None
+
+        for log in logs:
+            message_lower = log.message.lower()
+
+            if re.search(self.extended_patterns["holdover_entry"], message_lower) or \
+               (log.parsed_data.get("on_holdover") == True):
+                if not result["in_holdover"]:
+                    result["in_holdover"] = True
+                    holdover_start = log.timestamp
+                    result["holdover_events"].append({
+                        "type": "entry",
+                        "timestamp": log.timestamp.isoformat() if log.timestamp else None
+                    })
+
+            elif re.search(self.extended_patterns["holdover_exit"], message_lower) or \
+                 (log.parsed_data.get("on_holdover") == False and result["in_holdover"]):
+                if result["in_holdover"] and holdover_start:
+                    duration = (log.timestamp - holdover_start).total_seconds() if log.timestamp and holdover_start else 0
+                    result["holdover_events"].append({
+                        "type": "exit",
+                        "timestamp": log.timestamp.isoformat() if log.timestamp else None,
+                        "duration_seconds": duration
+                    })
+                    result["total_holdover_time_seconds"] += duration
+                    result["in_holdover"] = False
+                    holdover_start = None
+
+        if result["in_holdover"] and holdover_start:
+            result["current_holdover_duration_seconds"] = (datetime.now() - holdover_start).total_seconds()
 
         return result
 

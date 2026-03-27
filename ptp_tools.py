@@ -535,6 +535,42 @@ class PTPTools:
                 "stability": "unknown"
             }
 
+    async def analyze_holdover(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Track and analyze holdover behavior"""
+        try:
+            namespace = arguments.get("namespace", "openshift-ptp")
+            lines = arguments.get("lines", 2000)
+            kubeconfig = arguments.get("kubeconfig")
+
+            with kubeconfig_from_base64(kubeconfig) as kubeconfig_path:
+                logs = await self.log_parser.get_ptp_logs(namespace, lines, kubeconfig_path=kubeconfig_path)
+                holdover_data = self.log_parser.extract_holdover_events(logs)
+
+                try:
+                    config_data = await self.config_parser.get_ptp_configs(namespace, kubeconfig_path)
+                    ptp_config = self.model.create_ptp_configuration(config_data)
+                    holdover_timeout = ptp_config.thresholds.get("holdOverTimeout", 0)
+                except Exception as e:
+                    logger.debug(f"Could not get holdover timeout from config: {e}")
+                    holdover_timeout = None
+
+                return {
+                    "success": True,
+                    "in_holdover": holdover_data["in_holdover"],
+                    "holdover_duration_seconds": holdover_data["current_holdover_duration_seconds"],
+                    "holdover_events": holdover_data["holdover_events"],
+                    "total_holdover_time_seconds": holdover_data["total_holdover_time_seconds"],
+                    "holdover_timeout_configured": holdover_timeout
+                }
+
+        except Exception as e:
+            logger.error(f"Error analyzing holdover: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e),
+                "in_holdover": False
+            }
+
     async def get_gnss_status(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """Get detailed GNSS receiver status and quality metrics"""
         try:

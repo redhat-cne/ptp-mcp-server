@@ -203,6 +203,21 @@ async def quick_test():
     except Exception as e:
         print(f"❌ GNSS Status API: FAILED - {str(e)}")
 
+    # Test 13: Holdover Analysis API
+    print("\n1️⃣3️⃣ Testing Holdover Analysis API...")
+    total_tests += 1
+    try:
+        result = await tools.analyze_holdover({})
+        if result["success"]:
+            print("✅ Holdover Analysis API: PASSED")
+            print(f"   - In Holdover: {result.get('in_holdover', False)}")
+            print(f"   - Holdover Events: {len(result.get('holdover_events', []))}")
+            tests_passed += 1
+        else:
+            print(f"❌ Holdover Analysis API: FAILED - {result.get('error', 'Unknown error')}")
+    except Exception as e:
+        print(f"❌ Holdover Analysis API: FAILED - {str(e)}")
+
     # Summary
     print("\n" + "=" * 50)
     print("📊 TEST SUMMARY")
@@ -225,6 +240,7 @@ async def quick_test():
         print("   • analyze_servo_stability() - Servo controller analysis")
         print("   • get_port_status() - Port state and transitions")
         print("   • get_gnss_status() - GNSS receiver status")
+        print("   • analyze_holdover() - Holdover event analysis")
         
         print("\n🔧 Next Steps:")
         print("   1. Start the MCP server: python ptp_mcp_server.py")
