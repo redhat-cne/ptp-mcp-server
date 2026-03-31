@@ -1,0 +1,54 @@
+# PTP MCP Server RBAC Configuration
+# Grants necessary permissions for the MCP server to query PTP resources and logs
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ptp-mcp-server
+  namespace: openshift-ptp
+  labels:
+    app: ptp-mcp-server
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ptp-mcp-reader
+  namespace: openshift-ptp
+  labels:
+    app: ptp-mcp-server
+rules:
+# PTP configuration resources
+- apiGroups: ["ptp.openshift.io"]
+  resources: ["ptpconfigs", "ptpoperatorconfigs"]
+  verbs: ["get", "list", "watch"]
+# Pod access for logs and exec (PMC queries)
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["pods/log"]
+  verbs: ["get", "list"]
+# Required for PMC command execution via oc exec
+- apiGroups: [""]
+  resources: ["pods/exec"]
+  verbs: ["create"]
+# DaemonSet access (required for 'oc logs ds/linuxptp-daemon')
+- apiGroups: ["apps"]
+  resources: ["daemonsets"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ptp-mcp-reader-binding
+  namespace: openshift-ptp
+  labels:
+    app: ptp-mcp-server
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ptp-mcp-reader
+subjects:
+- kind: ServiceAccount
+  name: ptp-mcp-server
+  namespace: openshift-ptp

@@ -1,0 +1,77 @@
+# Example OLSConfig for integrating PTP MCP Server with OpenShift Lightspeed
+#
+# This is an EXAMPLE configuration snippet showing how to add the PTP MCP Server
+# to your existing OLSConfig. You should merge this with your existing OLSConfig,
+# not replace it entirely.
+#
+# Prerequisites:
+# 1. Deploy the PTP MCP Server using the other manifests in this directory
+# 2. Ensure the MCPServer feature gate is enabled
+# 3. Verify the service is accessible at the URL specified below
+#
+# Usage:
+#   # View your current OLSConfig
+#   oc get olsconfig cluster -o yaml
+#
+#   # Patch to add the MCP server (adjust URL if deployed in different namespace)
+#   oc patch olsconfig cluster --type=merge -p "$(cat olsconfig-patch.yaml)"
+#
+---
+# Full example OLSConfig with PTP MCP Server
+apiVersion: ols.openshift.io/v1alpha1
+kind: OLSConfig
+metadata:
+  name: cluster
+spec:
+  # Enable MCP Server feature gate
+  featureGates:
+  - MCPServer
+
+  # MCP Servers configuration
+  mcpServers:
+  - name: ptp-monitoring
+    streamableHTTP:
+      # URL to the PTP MCP Server service
+      # Format: http://<service>.<namespace>.svc.cluster.local:<port>/mcp
+      url: 'http://ptp-mcp-server.openshift-ptp.svc.cluster.local:8080/mcp'
+      # Request timeout in seconds
+      timeout: 30
+      # SSE read timeout in seconds (for long-running operations)
+      sseReadTimeout: 60
+      # Enable Server-Sent Events for streaming responses
+      enableSSE: true
+      # Optional: Custom headers for authentication
+      # headers:
+      #   kubernetes-authorization: kubernetes
+
+  # Your existing LLM configuration goes here
+  # llm:
+  #   providers:
+  #   - name: myProvider
+  #     type: openai
+  #     ...
+
+  # Your existing OLS configuration goes here
+  # ols:
+  #   defaultModel: ...
+  #   defaultProvider: ...
+
+---
+# Alternative: Patch file for adding MCP server to existing OLSConfig
+# Save this as olsconfig-patch.yaml and use:
+#   oc patch olsconfig cluster --type=merge -p "$(cat olsconfig-patch.yaml)"
+#
+# apiVersion: ols.openshift.io/v1alpha1
+# kind: OLSConfig
+# metadata:
+#   name: cluster
+# spec:
+#   featureGates:
+#   - MCPServer
+#   mcpServers:
+#   - name: ptp-monitoring
+#     streamableHTTP:
+#       url: 'http://ptp-mcp-server.openshift-ptp.svc.cluster.local:8080/mcp'
+#       timeout: 30
+#       sseReadTimeout: 60
+#       enableSSE: true

@@ -23,7 +23,7 @@ A Model Context Protocol (MCP) server for monitoring and analyzing Precision Tim
 
 1. **Clone the repository**:
    ```bash
-   git clone https://github.com/aneeshkp/ptp-mcp-server.git
+   git clone https://github.com/redhat-cne/ptp-mcp-server.git
    cd ptp-mcp-server
    ```
 
@@ -43,6 +43,7 @@ A Model Context Protocol (MCP) server for monitoring and analyzing Precision Tim
 Run the comprehensive test suite:
 
 ```bash
+export KUBECONFIG=/path/to/kubeconfig
 python quick_test.py
 ```
 
@@ -53,6 +54,14 @@ Expected output:
 Tests Passed: 8/8
 Success Rate: 100.0%
 🎉 ALL TESTS PASSED! Your API is ready for agent integration.
+```
+
+## Deploy to Openshift
+```bash
+podman build -t quay.io/$USER/ptp-mcp-server:latest .
+podman push quay.io/$USER/ptp-mcp-server:latest
+cd k8s && kustomize edit set image quay.io/redhat-cne/ptp-mcp-server=quay.io/$USER/ptp-mcp-server:latest && cd ..
+oc apply -k k8s/
 ```
 
 ## 📚 API Endpoints
@@ -157,21 +166,142 @@ asyncio.run(analyze_logs())
 
 ## 🔧 MCP Server
 
-Start the MCP server for integration with MCP-compatible clients:
+The MCP server supports two transport modes:
+- **stdio**: For local MCP clients (Claude Code, Claude Desktop)
+- **HTTP/SSE**: For OpenShift Lightspeed integration
+
+### Local Usage (stdio mode)
 
 ```bash
 python ptp_mcp_server.py
 ```
 
-The server provides the following MCP tools:
-- `get_ptp_config` - Get PTP configuration
-- `get_ptp_logs` - Get linuxptp daemon logs
-- `search_logs` - Search logs for patterns
-- `get_grandmaster_status` - Get grandmaster info
-- `analyze_sync_status` - Analyze sync status
-- `get_clock_hierarchy` - Get clock hierarchy
-- `check_ptp_health` - Comprehensive health check
-- `query_ptp` - Natural language interface
+### Remote Usage (http mode)
+
+```bash
+# Default port 8080
+python ptp_mcp_server.py --http
+
+# Custom port
+python ptp_mcp_server.py --http --port 9000
+
+# Or use environment variable
+PTP_MCP_PORT=9000 python ptp_mcp_server.py --http
+```
+
+### MCP Tools Available
+
+| Tool | Description |
+|------|-------------|
+| `get_ptp_config` | Get PTP configuration |
+| `get_ptp_logs` | Get linuxptp daemon logs |
+| `search_logs` | Search logs for patterns |
+| `get_grandmaster_status` | Get grandmaster info |
+| `analyze_sync_status` | Analyze sync status |
+| `get_clock_hierarchy` | Get clock hierarchy |
+| `check_ptp_health` | Comprehensive health check |
+| `query_ptp` | Natural language interface |
+
+## 🚢 Deploying to OpenShift
+
+The MCP server can be deployed to OpenShift for integration with OpenShift Lightspeed.
+
+### In-Cluster Authentication
+
+Use the ServiceAccount token automatically provided by Kubernetes. Best for when the MCP server runs in the same cluster it monitors.
+
+**Step 1: Build and push the container image**
+
+```bash
+# Build the image
+podman build -t quay.io/$USER/ptp-mcp-server:latest .
+
+# Push to registry
+podman push quay.io/$USER/ptp-mcp-server:latest
+```
+
+**Step 2: Deploy to OpenShift**
+
+```bash
+# Deploy RBAC, Deployment, and Service
+oc apply -k k8s/
+
+# Verify deployment
+oc get pods -n openshift-ptp -l app=ptp-mcp-server
+oc logs -n openshift-ptp -l app=ptp-mcp-server
+```
+
+**Step 3: Verify permissions**
+
+```bash
+# Test ServiceAccount permissions
+oc auth can-i get ptpconfigs \
+  --as=system:serviceaccount:openshift-ptp:ptp-mcp-server
+
+oc auth can-i get pods/log -n openshift-ptp \
+  --as=system:serviceaccount:openshift-ptp:ptp-mcp-server
+
+oc auth can-i create pods/exec -n openshift-ptp \
+  --as=system:serviceaccount:openshift-ptp:ptp-mcp-server
+```
+
+**Step 4: Configure OpenShift Lightspeed**
+
+Add the MCP server to your OLSConfig:
+
+```yaml
+apiVersion: ols.openshift.io/v1alpha1
+kind: OLSConfig
+metadata:
+  name: cluster
+spec:
+  featureGates:
+  - MCPServer
+  mcpServers:
+  - name: ptp-monitoring
+    streamableHTTP:
+      url: 'http://ptp-mcp-server.openshift-ptp.svc.cluster.local:8080/mcp'
+      timeout: 30
+      sseReadTimeout: 60
+      enableSSE: true
+```
+
+### Customizing the Port
+
+The server port can be configured via environment variable:
+
+```yaml
+# In k8s/deployment.yaml
+env:
+- name: PTP_MCP_PORT
+  value: "9000"  # Change from default 8080
+```
+
+Remember to also update the Service and OLSConfig URL if you change the port.
+
+### Deployment Files
+
+| File | Purpose |
+|------|---------|
+| `Dockerfile` | Container image with Python + oc CLI |
+| `k8s/rbac.yaml` | ServiceAccount, ClusterRole, ClusterRoleBinding |
+| `k8s/deployment.yaml` | Deployment with health checks |
+| `k8s/service.yaml` | ClusterIP Service |
+| `k8s/olsconfig-example.yaml` | Example OLS configuration |
+| `k8s/kustomization.yaml` | Deploy all with `oc apply -k k8s/` |
+
+### RBAC Permissions
+
+The ServiceAccount is granted these permissions:
+
+| Resource | Verbs | Purpose |
+|----------|-------|---------|
+| `ptpconfigs`, `ptpoperatorconfigs` | get, list, watch | Read PTP configurations |
+| `pods` | get, list, watch | Find linuxptp-daemon pods |
+| `pods/log` | get, list | Read daemon logs |
+| `pods/exec` | create | Execute PMC queries |
+| `namespaces` | get, list | Namespace access |
+| `nodes` | get, list | Node topology (optional) |
 
 ## 📊 Performance
 
@@ -184,7 +314,7 @@ The server provides the following MCP tools:
 
 ```
 ptp-mcp-server/
-├── ptp_mcp_server.py      # Main MCP server
+├── ptp_mcp_server.py      # Main MCP server (stdio + HTTP modes)
 ├── ptp_config_parser.py   # PTP configuration parser
 ├── ptp_log_parser.py      # Linuxptp log parser
 ├── ptp_model.py           # PTP data models
@@ -192,7 +322,14 @@ ptp-mcp-server/
 ├── ptp_tools.py           # API endpoint implementations
 ├── quick_test.py          # Quick test suite
 ├── performance_test.py    # Performance benchmarking
-└── requirements.txt       # Python dependencies
+├── requirements.txt       # Python dependencies
+├── Dockerfile             # Container image definition
+└── k8s/                   # Kubernetes/OpenShift manifests
+    ├── kustomization.yaml # Kustomize configuration
+    ├── rbac.yaml          # ServiceAccount & RBAC
+    ├── deployment.yaml    # Deployment specification
+    ├── service.yaml       # Service definition
+    └── olsconfig-example.yaml  # OLS integration example
 ```
 
 ## 🔍 PTP Concepts Supported

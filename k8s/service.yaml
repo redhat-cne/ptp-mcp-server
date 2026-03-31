@@ -1,0 +1,19 @@
+# PTP MCP Server Service
+# Exposes the PTP MCP Server for OpenShift Lightspeed
+apiVersion: v1
+kind: Service
+metadata:
+  name: ptp-mcp-server
+  namespace: openshift-ptp
+  labels:
+    app: ptp-mcp-server
+    app.kubernetes.io/name: ptp-mcp-server
+spec:
+  type: ClusterIP
+  selector:
+    app: ptp-mcp-server
+  ports:
+  - name: http
+    port: 8080
+    targetPort: http
+    protocol: TCP
