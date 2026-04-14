@@ -19,7 +19,7 @@ A Model Context Protocol (MCP) server for monitoring and analyzing Precision Tim
 - Access to OpenShift cluster with PTP operator installed
 - PTP namespace (`openshift-ptp`) exists
 
-## 🛠️ Installation
+## 🛠️ Source Installation
 
 1. **Clone the repository**:
    ```bash
@@ -27,18 +27,21 @@ A Model Context Protocol (MCP) server for monitoring and analyzing Precision Tim
    cd ptp-mcp-server
    ```
 
-2. **Install dependencies**:
+## To Deploy For Quick Tests
+ 
+1. **Install dependencies**:
    ```bash
    pip install -r requirements.txt
    ```
 
-3. **Verify OpenShift access**:
+2. **Verify OpenShift access**:
    ```bash
+   export KUBECONFIG=/path/to/kubeconfig
    oc whoami
    oc get namespace openshift-ptp
    ```
 
-## 🧪 Quick Testing
+3. **Quick Testing**
 
 Run the comprehensive test suite:
 
@@ -56,12 +59,98 @@ Success Rate: 100.0%
 🎉 ALL TESTS PASSED! Your API is ready for agent integration.
 ```
 
-## Deploy to Openshift
+## 🔧 MCP Server
+
+The MCP server supports two transport modes:
+- **stdio**: For local MCP clients (Claude Code, Claude Desktop)
+- **HTTP/SSE**: For OpenShift Lightspeed integration
+
+### Local Usage (stdio mode)
+
+```bash
+python ptp_mcp_server.py
+```
+
+### Remote Usage (http mode)
+
+```bash
+# Default port 8080
+python ptp_mcp_server.py --http
+
+# Custom port
+python ptp_mcp_server.py --http --port 9000
+
+# Or use environment variable
+PTP_MCP_PORT=9000 python ptp_mcp_server.py --http
+```
+
+### Deploy to OpenShift
+
 ```bash
 podman build -t quay.io/$USER/ptp-mcp-server:latest .
 podman push quay.io/$USER/ptp-mcp-server:latest
 cd k8s && kustomize edit set image quay.io/redhat-cne/ptp-mcp-server=quay.io/$USER/ptp-mcp-server:latest && cd ..
 oc apply -k k8s/
+```
+
+#### Configure in OpenShift Lightspeed
+
+Add the MCP server to your OLSConfig:
+
+```yaml
+apiVersion: ols.openshift.io/v1alpha1
+kind: OLSConfig
+metadata:
+  name: cluster
+spec:
+  featureGates:
+  - MCPServer
+  mcpServers:
+  - name: ptp-monitoring
+    url: 'http://ptp-mcp-server.openshift-ptp.svc.cluster.local:8080/mcp'
+    timeout: 30
+```
+
+#### Usage in OpenShift Lightspeed
+
+By default, the MCP server assumes that it is running on the cluster that is to
+be monitored/queried.  Any tool use will target the local cluster.  However, if
+the MCP server is running on a hub cluster and the user intends for its prompt
+to target spoke cluster then OLS context should include a base64 copy of the
+kubeconfig for the spoke cluster.
+
+**note:** It is important to use a minimal kubeconfig that is token based rather
+than a client certificate based kubeconfig as the OLS context size will not
+allow for a larger kubeconfig value.
+
+The following example generates such a kubeconfig for lab testing purposes.  In
+a production environment care should be taken to limit the service account
+permissions to only the strict minimum RBAC policies required.
+
+```bash
+oc create sa ols-ptp-user -n default 2>/dev/null
+oc adm policy add-cluster-role-to-user cluster-admin -z ols-ptp-user -n default
+TOKEN=$(oc create token ols-ptp-user -n default --duration=24h)
+API_SERVER=$(oc whoami --show-server)
+cat << EOF > minimal-kubeconfig.yaml
+apiVersion: v1
+kind: Config
+clusters:
+- cluster:
+    server: ${API_SERVER}
+    insecure-skip-tls-verify: true
+  name: cluster
+contexts:
+- context:
+    cluster: cluster
+    user: user
+  name: ctx
+current-context: ctx
+users:
+- name: user
+  user:
+    token: ${TOKEN}
+EOF
 ```
 
 ## 📚 API Endpoints
@@ -164,31 +253,6 @@ async def analyze_logs():
 asyncio.run(analyze_logs())
 ```
 
-## 🔧 MCP Server
-
-The MCP server supports two transport modes:
-- **stdio**: For local MCP clients (Claude Code, Claude Desktop)
-- **HTTP/SSE**: For OpenShift Lightspeed integration
-
-### Local Usage (stdio mode)
-
-```bash
-python ptp_mcp_server.py
-```
-
-### Remote Usage (http mode)
-
-```bash
-# Default port 8080
-python ptp_mcp_server.py --http
-
-# Custom port
-python ptp_mcp_server.py --http --port 9000
-
-# Or use environment variable
-PTP_MCP_PORT=9000 python ptp_mcp_server.py --http
-```
-
 ### MCP Tools Available
 
 | Tool | Description |
@@ -201,83 +265,6 @@ PTP_MCP_PORT=9000 python ptp_mcp_server.py --http
 | `get_clock_hierarchy` | Get clock hierarchy |
 | `check_ptp_health` | Comprehensive health check |
 | `query_ptp` | Natural language interface |
-
-## 🚢 Deploying to OpenShift
-
-The MCP server can be deployed to OpenShift for integration with OpenShift Lightspeed.
-
-### In-Cluster Authentication
-
-Use the ServiceAccount token automatically provided by Kubernetes. Best for when the MCP server runs in the same cluster it monitors.
-
-**Step 1: Build and push the container image**
-
-```bash
-# Build the image
-podman build -t quay.io/$USER/ptp-mcp-server:latest .
-
-# Push to registry
-podman push quay.io/$USER/ptp-mcp-server:latest
-```
-
-**Step 2: Deploy to OpenShift**
-
-```bash
-# Deploy RBAC, Deployment, and Service
-oc apply -k k8s/
-
-# Verify deployment
-oc get pods -n openshift-ptp -l app=ptp-mcp-server
-oc logs -n openshift-ptp -l app=ptp-mcp-server
-```
-
-**Step 3: Verify permissions**
-
-```bash
-# Test ServiceAccount permissions
-oc auth can-i get ptpconfigs \
-  --as=system:serviceaccount:openshift-ptp:ptp-mcp-server
-
-oc auth can-i get pods/log -n openshift-ptp \
-  --as=system:serviceaccount:openshift-ptp:ptp-mcp-server
-
-oc auth can-i create pods/exec -n openshift-ptp \
-  --as=system:serviceaccount:openshift-ptp:ptp-mcp-server
-```
-
-**Step 4: Configure OpenShift Lightspeed**
-
-Add the MCP server to your OLSConfig:
-
-```yaml
-apiVersion: ols.openshift.io/v1alpha1
-kind: OLSConfig
-metadata:
-  name: cluster
-spec:
-  featureGates:
-  - MCPServer
-  mcpServers:
-  - name: ptp-monitoring
-    streamableHTTP:
-      url: 'http://ptp-mcp-server.openshift-ptp.svc.cluster.local:8080/mcp'
-      timeout: 30
-      sseReadTimeout: 60
-      enableSSE: true
-```
-
-### Customizing the Port
-
-The server port can be configured via environment variable:
-
-```yaml
-# In k8s/deployment.yaml
-env:
-- name: PTP_MCP_PORT
-  value: "9000"  # Change from default 8080
-```
-
-Remember to also update the Service and OLSConfig URL if you change the port.
 
 ### Deployment Files
 

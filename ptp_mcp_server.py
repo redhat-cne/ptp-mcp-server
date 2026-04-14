@@ -84,6 +84,10 @@ class PTPMCPServer:
                                 "type": "string",
                                 "default": "openshift-ptp",
                                 "description": "Namespace containing PTP resources"
+                            },
+                            "kubeconfig": {
+                                "type": "string",
+                                "description": "MUST be base64-encoded kubeconfig content. To target a different cluster, the kubeconfig file must first be base64 encoded using: cat kubeconfig.yaml | base64 -w0. Then pass the resulting base64 string here. Optional - if not provided, uses the default cluster."
                             }
                         }
                     }
@@ -107,6 +111,10 @@ class PTPMCPServer:
                             "since": {
                                 "type": "string",
                                 "description": "Time since to get logs (e.g., '1h', '30m')"
+                            },
+                            "kubeconfig": {
+                                "type": "string",
+                                "description": "MUST be base64-encoded kubeconfig content. To target a different cluster, the kubeconfig file must first be base64 encoded using: cat kubeconfig.yaml | base64 -w0. Then pass the resulting base64 string here. Optional - if not provided, uses the default cluster."
                             }
                         }
                     }
@@ -129,6 +137,10 @@ class PTPMCPServer:
                                 "type": "string",
                                 "enum": ["error", "warning", "info", "debug"],
                                 "description": "Minimum log level to include"
+                            },
+                            "kubeconfig": {
+                                "type": "string",
+                                "description": "MUST be base64-encoded kubeconfig content. To target a different cluster, the kubeconfig file must first be base64 encoded using: cat kubeconfig.yaml | base64 -w0. Then pass the resulting base64 string here. Optional - if not provided, uses the default cluster."
                             }
                         },
                         "required": ["query"]
@@ -144,6 +156,10 @@ class PTPMCPServer:
                                 "type": "boolean",
                                 "default": False,
                                 "description": "Include detailed grandmaster information"
+                            },
+                            "kubeconfig": {
+                                "type": "string",
+                                "description": "MUST be base64-encoded kubeconfig content. To target a different cluster, the kubeconfig file must first be base64 encoded using: cat kubeconfig.yaml | base64 -w0. Then pass the resulting base64 string here. Optional - if not provided, uses the default cluster."
                             }
                         }
                     }
@@ -163,6 +179,10 @@ class PTPMCPServer:
                                 "type": "boolean",
                                 "default": True,
                                 "description": "Include BMCA state analysis"
+                            },
+                            "kubeconfig": {
+                                "type": "string",
+                                "description": "MUST be base64-encoded kubeconfig content. To target a different cluster, the kubeconfig file must first be base64 encoded using: cat kubeconfig.yaml | base64 -w0. Then pass the resulting base64 string here. Optional - if not provided, uses the default cluster."
                             }
                         }
                     }
@@ -182,6 +202,10 @@ class PTPMCPServer:
                                 "type": "boolean",
                                 "default": True,
                                 "description": "Include priority information"
+                            },
+                            "kubeconfig": {
+                                "type": "string",
+                                "description": "MUST be base64-encoded kubeconfig content. To target a different cluster, the kubeconfig file must first be base64 encoded using: cat kubeconfig.yaml | base64 -w0. Then pass the resulting base64 string here. Optional - if not provided, uses the default cluster."
                             }
                         }
                     }
@@ -206,6 +230,10 @@ class PTPMCPServer:
                                 "type": "boolean",
                                 "default": True,
                                 "description": "Check for log errors and warnings"
+                            },
+                            "kubeconfig": {
+                                "type": "string",
+                                "description": "MUST be base64-encoded kubeconfig content. To target a different cluster, the kubeconfig file must first be base64 encoded using: cat kubeconfig.yaml | base64 -w0. Then pass the resulting base64 string here. Optional - if not provided, uses the default cluster."
                             }
                         }
                     }
@@ -223,6 +251,10 @@ class PTPMCPServer:
                             "context": {
                                 "type": "string",
                                 "description": "Additional context for the query"
+                            },
+                            "kubeconfig": {
+                                "type": "string",
+                                "description": "MUST be base64-encoded kubeconfig content. To target a different cluster, the kubeconfig file must first be base64 encoded using: cat kubeconfig.yaml | base64 -w0. Then pass the resulting base64 string here. Optional - if not provided, uses the default cluster."
                             }
                         },
                         "required": ["question"]
@@ -234,7 +266,8 @@ class PTPMCPServer:
         @self.server.call_tool()
         async def handle_call_tool(name: str, arguments: Dict[str, Any]) -> CallToolResult:
             """Handle tool calls for PTP operations"""
-            logger.info(f"Tool call received: {name} with args: {arguments}")
+            safe_args = {k: ("***" if k == "kubeconfig" else v) for k, v in arguments.items()}
+            logger.info(f"Tool call received: {name} with args: {safe_args}")
             try:
                 if name == "get_ptp_config":
                     result = await self.ptp_tools.get_ptp_config(arguments)

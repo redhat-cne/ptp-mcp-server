@@ -10,41 +10,44 @@ import yaml
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 
+from kube_utils import build_oc_command
+
 logger = logging.getLogger(__name__)
 
 class PTPConfigParser:
     """Parser for OpenShift PTP configuration resources"""
-    
+
     def __init__(self):
         self.namespace = "openshift-ptp"
-    
-    async def get_ptp_configs(self, namespace: str = None) -> Dict[str, Any]:
-        """Get all PTP configurations from OpenShift cluster"""
+
+    async def get_ptp_configs(self, namespace: str = None, kubeconfig_path: str = None) -> Dict[str, Any]:
+        """Get all PTP configurations from OpenShift cluster
+
+        Args:
+            namespace: Kubernetes namespace (default: openshift-ptp)
+            kubeconfig_path: Path to kubeconfig file (optional, uses default cluster if not provided)
+        """
         if namespace is None:
             namespace = self.namespace
-            
+
         try:
-            # Execute oc command to get ptpconfig resources
-            cmd = [
-                "oc", "get", "ptpconfig", 
-                "-n", namespace, 
-                "-o", "yaml"
-            ]
-            
+            cmd = build_oc_command(kubeconfig_path)
+            cmd.extend(["get", "ptpconfig", "-n", namespace, "-o", "yaml"])
+
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
                 timeout=30
             )
-            
+
             if result.returncode != 0:
                 raise Exception(f"Failed to get PTP configs: {result.stderr}")
-            
+
             # Parse YAML response
             configs = yaml.safe_load(result.stdout)
             return self._parse_ptp_configs(configs)
-            
+
         except subprocess.TimeoutExpired:
             raise Exception("Timeout getting PTP configurations")
         except Exception as e:
