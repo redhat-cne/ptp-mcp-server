@@ -265,6 +265,15 @@ asyncio.run(analyze_logs())
 | `get_clock_hierarchy` | Get clock hierarchy |
 | `check_ptp_health` | Comprehensive health check |
 | `query_ptp` | Natural language interface |
+| `analyze_servo_stability` | PI servo controller analysis |
+| `analyze_frequency_drift` | Frequency trend analysis |
+| `analyze_holdover` | Holdover event analysis |
+| `get_gnss_status` | GNSS receiver status |
+| `get_port_status` | PTP port state tracking |
+| `run_pmc_query` | Execute PMC commands |
+| `get_ptp_hardware_info` | NIC PTP capability detection |
+| `map_hardware_to_config` | Hardware-to-config mapping |
+| `get_ptp_metrics` | Prometheus metrics collection |
 
 ### Deployment Files
 
@@ -311,12 +320,14 @@ ptp-mcp-server/
 ├── performance_test.py    # Performance benchmarking
 ├── requirements.txt       # Python dependencies
 ├── Dockerfile             # Container image definition
-└── k8s/                   # Kubernetes/OpenShift manifests
-    ├── kustomization.yaml # Kustomize configuration
-    ├── rbac.yaml          # ServiceAccount & RBAC
-    ├── deployment.yaml    # Deployment specification
-    ├── service.yaml       # Service definition
-    └── olsconfig-example.yaml  # OLS integration example
+├── k8s/                   # Kubernetes/OpenShift manifests
+│   ├── kustomization.yaml # Kustomize configuration
+│   ├── rbac.yaml          # ServiceAccount & RBAC
+│   ├── deployment.yaml    # Deployment specification
+│   ├── service.yaml       # Service definition
+│   └── olsconfig-example.yaml  # OLS integration example
+└── docs/
+    └── ptp-troubleshooting-guide.md  # RAG content for OLS
 ```
 
 ## 🔍 PTP Concepts Supported

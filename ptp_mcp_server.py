@@ -166,7 +166,7 @@ class PTPMCPServer:
                 ),
                 Tool(
                     name="analyze_sync_status",
-                    description="Analyze PTP synchronization status and health",
+                    description="Analyze PTP synchronization status and health, including optional path delay analysis",
                     inputSchema={
                         "type": "object",
                         "properties": {
@@ -179,6 +179,11 @@ class PTPMCPServer:
                                 "type": "boolean",
                                 "default": True,
                                 "description": "Include BMCA state analysis"
+                            },
+                            "include_path_delay": {
+                                "type": "boolean",
+                                "default": False,
+                                "description": "Include network path delay and asymmetry analysis"
                             },
                             "kubeconfig": {
                                 "type": "string",
@@ -259,7 +264,212 @@ class PTPMCPServer:
                         },
                         "required": ["question"]
                     }
-                )
+                ),
+                Tool(
+                    name="analyze_servo_stability",
+                    description="Analyze PI servo controller behavior, detect clockcheck events, and assess stability",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "namespace": {
+                                "type": "string",
+                                "default": "openshift-ptp",
+                                "description": "Kubernetes namespace"
+                            },
+                            "lines": {
+                                "type": "integer",
+                                "default": 1000,
+                                "description": "Number of log lines to analyze"
+                            },
+                            "kubeconfig": {
+                                "type": "string",
+                                "description": "MUST be base64-encoded kubeconfig content. To target a different cluster, the kubeconfig file must first be base64 encoded using: cat kubeconfig.yaml | base64 -w0. Then pass the resulting base64 string here. Optional - if not provided, uses the default cluster."
+                            }
+                        }
+                    }
+                ),
+                Tool(
+                    name="analyze_frequency_drift",
+                    description="Detect and trend frequency adjustments over time",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "namespace": {
+                                "type": "string",
+                                "default": "openshift-ptp",
+                                "description": "Kubernetes namespace"
+                            },
+                            "window_minutes": {
+                                "type": "integer",
+                                "default": 60,
+                                "description": "Time window in minutes for analysis"
+                            },
+                            "kubeconfig": {
+                                "type": "string",
+                                "description": "MUST be base64-encoded kubeconfig content. To target a different cluster, the kubeconfig file must first be base64 encoded using: cat kubeconfig.yaml | base64 -w0. Then pass the resulting base64 string here. Optional - if not provided, uses the default cluster."
+                            }
+                        }
+                    }
+                ),
+                Tool(
+                    name="analyze_holdover",
+                    description="Track and analyze holdover behavior and events",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "namespace": {
+                                "type": "string",
+                                "default": "openshift-ptp",
+                                "description": "Kubernetes namespace"
+                            },
+                            "kubeconfig": {
+                                "type": "string",
+                                "description": "MUST be base64-encoded kubeconfig content. To target a different cluster, the kubeconfig file must first be base64 encoded using: cat kubeconfig.yaml | base64 -w0. Then pass the resulting base64 string here. Optional - if not provided, uses the default cluster."
+                            }
+                        }
+                    }
+                ),
+                Tool(
+                    name="get_gnss_status",
+                    description="Get detailed GNSS receiver status and quality metrics",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "namespace": {
+                                "type": "string",
+                                "default": "openshift-ptp",
+                                "description": "Kubernetes namespace"
+                            },
+                            "kubeconfig": {
+                                "type": "string",
+                                "description": "MUST be base64-encoded kubeconfig content. To target a different cluster, the kubeconfig file must first be base64 encoded using: cat kubeconfig.yaml | base64 -w0. Then pass the resulting base64 string here. Optional - if not provided, uses the default cluster."
+                            }
+                        }
+                    }
+                ),
+                Tool(
+                    name="get_port_status",
+                    description="Get PTP port states and transition history",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "namespace": {
+                                "type": "string",
+                                "default": "openshift-ptp",
+                                "description": "Kubernetes namespace"
+                            },
+                            "interface": {
+                                "type": "string",
+                                "description": "Specific interface to check (optional)"
+                            },
+                            "include_history": {
+                                "type": "boolean",
+                                "default": True,
+                                "description": "Include transition history"
+                            },
+                            "kubeconfig": {
+                                "type": "string",
+                                "description": "MUST be base64-encoded kubeconfig content. To target a different cluster, the kubeconfig file must first be base64 encoded using: cat kubeconfig.yaml | base64 -w0. Then pass the resulting base64 string here. Optional - if not provided, uses the default cluster."
+                            }
+                        }
+                    }
+                ),
+                Tool(
+                    name="run_pmc_query",
+                    description="Execute PMC (PTP Management Client) queries for real-time PTP data",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "command": {
+                                "type": "string",
+                                "enum": ["PARENT_DATA_SET", "DEFAULT_DATA_SET", "CURRENT_DATA_SET", "TIME_PROPERTIES_DATA_SET", "PORT_DATA_SET", "GRANDMASTER_SETTINGS_NP"],
+                                "default": "PARENT_DATA_SET",
+                                "description": "PMC command to execute"
+                            },
+                            "namespace": {
+                                "type": "string",
+                                "default": "openshift-ptp",
+                                "description": "Kubernetes namespace"
+                            },
+                            "config_file": {
+                                "type": "string",
+                                "default": "/var/run/ptp4l.0.config",
+                                "description": "Path to ptp4l config file in the pod"
+                            },
+                            "kubeconfig": {
+                                "type": "string",
+                                "description": "MUST be base64-encoded kubeconfig content. To target a different cluster, the kubeconfig file must first be base64 encoded using: cat kubeconfig.yaml | base64 -w0. Then pass the resulting base64 string here. Optional - if not provided, uses the default cluster."
+                            }
+                        }
+                    }
+                ),
+                Tool(
+                    name="get_ptp_metrics",
+                    description="Fetch Prometheus metrics from PTP daemon pods (port 9091), parse and filter by PTP-specific labels (offset, frequency, clock_state, interface_role), and compute summary statistics",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "namespace": {
+                                "type": "string",
+                                "default": "openshift-ptp",
+                                "description": "Kubernetes namespace"
+                            },
+                            "filter": {
+                                "type": "string",
+                                "description": "Filter metrics by name or label value (e.g., 'offset', 'clock_state', an interface name)"
+                            },
+                            "include_summary": {
+                                "type": "boolean",
+                                "default": True,
+                                "description": "Include summary statistics (min/max/avg) per metric"
+                            },
+                            "kubeconfig": {
+                                "type": "string",
+                                "description": "MUST be base64-encoded kubeconfig content. To target a different cluster, the kubeconfig file must first be base64 encoded using: cat kubeconfig.yaml | base64 -w0. Then pass the resulting base64 string here. Optional - if not provided, uses the default cluster."
+                            }
+                        }
+                    }
+                ),
+                Tool(
+                    name="map_hardware_to_config",
+                    description="Map PTP configurations to actual hardware capabilities, identifying misconfigurations like PTP profiles assigned to interfaces without hardware timestamping support",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "namespace": {
+                                "type": "string",
+                                "default": "openshift-ptp",
+                                "description": "Kubernetes namespace"
+                            },
+                            "kubeconfig": {
+                                "type": "string",
+                                "description": "MUST be base64-encoded kubeconfig content. To target a different cluster, the kubeconfig file must first be base64 encoded using: cat kubeconfig.yaml | base64 -w0. Then pass the resulting base64 string here. Optional - if not provided, uses the default cluster."
+                            }
+                        }
+                    }
+                ),
+                Tool(
+                    name="get_ptp_hardware_info",
+                    description="Get PTP hardware capabilities for network interfaces including timestamping support, PHC devices, driver info, and PTP readiness assessment",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "namespace": {
+                                "type": "string",
+                                "default": "openshift-ptp",
+                                "description": "Kubernetes namespace"
+                            },
+                            "interface": {
+                                "type": "string",
+                                "description": "Specific interface to check (optional, checks all physical interfaces if omitted)"
+                            },
+                            "kubeconfig": {
+                                "type": "string",
+                                "description": "MUST be base64-encoded kubeconfig content. To target a different cluster, the kubeconfig file must first be base64 encoded using: cat kubeconfig.yaml | base64 -w0. Then pass the resulting base64 string here. Optional - if not provided, uses the default cluster."
+                            }
+                        }
+                    }
+                ),
             ]
             return ListToolsResult(tools=tools)
 
@@ -285,6 +495,24 @@ class PTPMCPServer:
                     result = await self.ptp_tools.check_ptp_health(arguments)
                 elif name == "query_ptp":
                     result = await self.ptp_tools.query_ptp(arguments)
+                elif name == "analyze_servo_stability":
+                    result = await self.ptp_tools.analyze_servo_stability(arguments)
+                elif name == "analyze_frequency_drift":
+                    result = await self.ptp_tools.analyze_frequency_drift(arguments)
+                elif name == "analyze_holdover":
+                    result = await self.ptp_tools.analyze_holdover(arguments)
+                elif name == "get_gnss_status":
+                    result = await self.ptp_tools.get_gnss_status(arguments)
+                elif name == "get_port_status":
+                    result = await self.ptp_tools.get_port_status(arguments)
+                elif name == "run_pmc_query":
+                    result = await self.ptp_tools.run_pmc_query(arguments)
+                elif name == "get_ptp_hardware_info":
+                    result = await self.ptp_tools.get_ptp_hardware_info(arguments)
+                elif name == "map_hardware_to_config":
+                    result = await self.ptp_tools.map_hardware_to_config(arguments)
+                elif name == "get_ptp_metrics":
+                    result = await self.ptp_tools.get_ptp_metrics(arguments)
                 else:
                     raise ValueError(f"Unknown tool: {name}")
 

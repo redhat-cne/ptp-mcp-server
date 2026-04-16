@@ -132,16 +132,154 @@ async def quick_test():
         result = await tools.get_clock_hierarchy({})
         if result["success"]:
             print("✅ Clock Hierarchy API: PASSED")
-            hierarchy = result.get("hierarchy", {})
-            current_clock = hierarchy.get("current_clock", {})
+            current_clock = result.get("current_clock", {})
             print(f"   - Clock Type: {current_clock.get('type', 'unknown')}")
             print(f"   - Domain: {current_clock.get('domain', 'unknown')}")
+            print(f"   - Summary: {result.get('summary', 'N/A')[:80]}")
             tests_passed += 1
         else:
             print(f"❌ Clock Hierarchy API: FAILED - {result.get('error', 'Unknown error')}")
     except Exception as e:
         print(f"❌ Clock Hierarchy API: FAILED - {str(e)}")
     
+    # Test 9: PMC Query API
+    print("\n9️⃣  Testing PMC Query API...")
+    total_tests += 1
+    try:
+        result = await tools.run_pmc_query({"command": "CURRENT_DATA_SET"})
+        if result["success"]:
+            print("✅ PMC Query API: PASSED")
+            print(f"   - Command: {result.get('command', 'N/A')}")
+            data = result.get("data", {})
+            print(f"   - Steps Removed: {data.get('steps_removed', 'N/A')}")
+            tests_passed += 1
+        else:
+            print(f"❌ PMC Query API: FAILED - {result.get('error', 'Unknown error')}")
+    except Exception as e:
+        print(f"❌ PMC Query API: FAILED - {str(e)}")
+
+    # Test 10: Servo Stability API
+    print("\n🔟 Testing Servo Stability API...")
+    total_tests += 1
+    try:
+        result = await tools.analyze_servo_stability({})
+        if result["success"]:
+            print("✅ Servo Stability API: PASSED")
+            print(f"   - Stability: {result.get('stability', 'unknown')}")
+            print(f"   - Servo State: {result.get('servo_state', 'unknown')}")
+            tests_passed += 1
+        else:
+            print(f"❌ Servo Stability API: FAILED - {result.get('error', 'Unknown error')}")
+    except Exception as e:
+        print(f"❌ Servo Stability API: FAILED - {str(e)}")
+
+    # Test 11: Port Status API
+    print("\n1️⃣1️⃣ Testing Port Status API...")
+    total_tests += 1
+    try:
+        result = await tools.get_port_status({})
+        if result["success"]:
+            print("✅ Port Status API: PASSED")
+            print(f"   - Current Port State: {result.get('current_port_state', 'N/A')}")
+            print(f"   - Ports: {len(result.get('ports', {}))}")
+            tests_passed += 1
+        else:
+            print(f"❌ Port Status API: FAILED - {result.get('error', 'Unknown error')}")
+    except Exception as e:
+        print(f"❌ Port Status API: FAILED - {str(e)}")
+
+    # Test 12: GNSS Status API
+    print("\n1️⃣2️⃣ Testing GNSS Status API...")
+    total_tests += 1
+    try:
+        result = await tools.get_gnss_status({})
+        if result["success"]:
+            print("✅ GNSS Status API: PASSED")
+            print(f"   - Fix Status: {result.get('fix_status', 'N/A')}")
+            print(f"   - Satellites: {result.get('satellites_used', 'N/A')}")
+            tests_passed += 1
+        else:
+            print(f"❌ GNSS Status API: FAILED - {result.get('error', 'Unknown error')}")
+    except Exception as e:
+        print(f"❌ GNSS Status API: FAILED - {str(e)}")
+
+    # Test 13: Holdover Analysis API
+    print("\n1️⃣3️⃣ Testing Holdover Analysis API...")
+    total_tests += 1
+    try:
+        result = await tools.analyze_holdover({})
+        if result["success"]:
+            print("✅ Holdover Analysis API: PASSED")
+            print(f"   - In Holdover: {result.get('in_holdover', False)}")
+            print(f"   - Holdover Events: {len(result.get('holdover_events', []))}")
+            tests_passed += 1
+        else:
+            print(f"❌ Holdover Analysis API: FAILED - {result.get('error', 'Unknown error')}")
+    except Exception as e:
+        print(f"❌ Holdover Analysis API: FAILED - {str(e)}")
+
+    # Test 14: Frequency Drift API
+    print("\n1️⃣4️⃣ Testing Frequency Drift API...")
+    total_tests += 1
+    try:
+        result = await tools.analyze_frequency_drift({})
+        if result["success"]:
+            print("✅ Frequency Drift API: PASSED")
+            print(f"   - Trend: {result.get('trend', 'unknown')}")
+            print(f"   - Estimated Stability: {result.get('estimated_stability', 'unknown')}")
+            tests_passed += 1
+        else:
+            print(f"❌ Frequency Drift API: FAILED - {result.get('error', 'Unknown error')}")
+    except Exception as e:
+        print(f"❌ Frequency Drift API: FAILED - {str(e)}")
+
+    # Test 15: Hardware Capability API
+    print("\n1️⃣5️⃣ Testing Hardware Capability API...")
+    total_tests += 1
+    try:
+        result = await tools.get_ptp_hardware_info({})
+        if result["success"]:
+            print("✅ Hardware Capability API: PASSED")
+            print(f"   - Total Interfaces: {result.get('total_interfaces', 0)}")
+            print(f"   - PTP Capable: {result.get('ptp_capable_count', 0)}")
+            print(f"   - HW Timestamping: {result.get('hw_timestamping_count', 0)}")
+            tests_passed += 1
+        else:
+            print(f"❌ Hardware Capability API: FAILED - {result.get('error', 'Unknown error')}")
+    except Exception as e:
+        print(f"❌ Hardware Capability API: FAILED - {str(e)}")
+
+    # Test 16: Hardware-to-Config Mapping API
+    print("\n1️⃣6️⃣ Testing Hardware-to-Config Mapping API...")
+    total_tests += 1
+    try:
+        result = await tools.map_hardware_to_config({})
+        if result["success"]:
+            print("✅ Hardware-to-Config Mapping API: PASSED")
+            print(f"   - Mappings: {len(result.get('mappings', []))}")
+            print(f"   - Issues: {len(result.get('issues', []))}")
+            print(f"   - Summary: {result.get('summary', 'N/A')[:80]}")
+            tests_passed += 1
+        else:
+            print(f"❌ Hardware-to-Config Mapping API: FAILED - {result.get('error', 'Unknown error')}")
+    except Exception as e:
+        print(f"❌ Hardware-to-Config Mapping API: FAILED - {str(e)}")
+
+    # Test 17: Prometheus Metrics API
+    print("\n1️⃣7️⃣ Testing Prometheus Metrics API...")
+    total_tests += 1
+    try:
+        result = await tools.get_ptp_metrics({})
+        if result["success"]:
+            print("✅ Prometheus Metrics API: PASSED")
+            print(f"   - Total Scraped: {result.get('total_metrics_scraped', 0)}")
+            print(f"   - PTP Metrics: {result.get('ptp_metrics_count', 0)}")
+            tests_passed += 1
+        else:
+            print(f"❌ Prometheus Metrics API: FAILED - {result.get('error', 'Unknown error')}")
+    except Exception as e:
+        print(f"❌ Prometheus Metrics API: FAILED - {str(e)}")
+
     # Summary
     print("\n" + "=" * 50)
     print("📊 TEST SUMMARY")
@@ -160,6 +298,15 @@ async def quick_test():
         print("   • get_clock_hierarchy() - Get clock hierarchy")
         print("   • check_ptp_health() - Comprehensive health check")
         print("   • query_ptp() - Natural language interface")
+        print("   • run_pmc_query() - PMC management queries")
+        print("   • analyze_servo_stability() - Servo controller analysis")
+        print("   • get_port_status() - Port state and transitions")
+        print("   • get_gnss_status() - GNSS receiver status")
+        print("   • analyze_holdover() - Holdover event analysis")
+        print("   • analyze_frequency_drift() - Frequency drift analysis")
+        print("   • get_ptp_hardware_info() - Hardware PTP capabilities")
+        print("   • map_hardware_to_config() - Hardware-to-config mapping")
+        print("   • get_ptp_metrics() - Prometheus metrics collection")
         
         print("\n🔧 Next Steps:")
         print("   1. Start the MCP server: python ptp_mcp_server.py")
