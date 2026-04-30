@@ -6,7 +6,6 @@ regex>=2023.8.8
 asyncio-mqtt>=0.16.1
 aiofiles>=23.2.1
 
-# HTTP/SSE transport dependencies (for OpenShift Lightspeed integration)
+# HTTP transport dependencies (for OpenShift Lightspeed integration)
 starlette>=0.27.0
 uvicorn>=0.23.0
-sse-starlette>=1.6.0

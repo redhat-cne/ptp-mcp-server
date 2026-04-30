@@ -23,6 +23,7 @@ import logging
 import os
 import subprocess
 import sys
+
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timedelta
 
@@ -323,24 +324,17 @@ class PTPMCPServer:
     async def run_http(self, host: str = "0.0.0.0", port: int = 8080):
         """Run the MCP server in HTTP mode (for OpenShift Lightspeed)"""
         try:
-            from mcp.server.sse import SseServerTransport
+            from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
             from starlette.responses import JSONResponse
             import uvicorn
         except ImportError as e:
             logger.error(f"HTTP mode requires additional dependencies: {e}")
-            logger.error("Install with: pip install starlette uvicorn sse-starlette")
+            logger.error("Install with: pip install starlette uvicorn")
             sys.exit(1)
 
-        # Create SSE transport
-        # The endpoint parameter is where clients POST messages back
-        sse_transport = SseServerTransport("/mcp/messages")
-
-        # Store reference to self for use in ASGI app
-        mcp_server = self.server
-        init_options = self._get_init_options()
+        session_manager = StreamableHTTPSessionManager(app=self.server)
 
         async def app(scope, receive, send):
-            """Custom ASGI application for MCP server"""
             path = scope.get("path", "")
             method = scope.get("method", "")
 
@@ -350,21 +344,9 @@ class PTPMCPServer:
             elif path == "/ready" and method == "GET":
                 response = JSONResponse({"status": "ready", "server": "ptp-mcp-server"})
                 await response(scope, receive, send)
-            elif path == "/mcp" and method == "GET":
-                # SSE endpoint - connect_sse handles the response
-                logger.info(f"SSE connection from {scope.get('client', 'unknown')}")
-                async with sse_transport.connect_sse(scope, receive, send) as streams:
-                    await mcp_server.run(
-                        streams[0],
-                        streams[1],
-                        init_options,
-                    )
-            elif path == "/mcp/messages" and method == "POST":
-                # POST messages - handle_post_message handles the response
-                logger.info(f"POST message from {scope.get('client', 'unknown')}")
-                await sse_transport.handle_post_message(scope, receive, send)
+            elif path == "/mcp":
+                await session_manager.handle_request(scope, receive, send)
             else:
-                # 404 Not Found
                 response = JSONResponse({"error": "Not found"}, status_code=404)
                 await response(scope, receive, send)
 
@@ -372,9 +354,13 @@ class PTPMCPServer:
         logger.info(f"MCP endpoint: http://{host}:{port}/mcp")
         logger.info(f"Health check: http://{host}:{port}/health")
 
-        config = uvicorn.Config(app, host=host, port=port, log_level="info")
-        server = uvicorn.Server(config)
-        await server.serve()
+        async def run():
+            config = uvicorn.Config(app, host=host, port=port, log_level="info")
+            server = uvicorn.Server(config)
+            async with session_manager.run():
+                await server.serve()
+
+        await run()
 
 
 def parse_args():
