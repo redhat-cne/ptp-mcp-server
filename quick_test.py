@@ -158,6 +158,44 @@ async def quick_test():
     except Exception as e:
         print(f"❌ PMC Query API: FAILED - {str(e)}")
 
+    # Test 10: Runtime Configs API
+    print("\n🔟 Testing Runtime Configs API...")
+    total_tests += 1
+    try:
+        result = await tools.get_ptp_runtime_configs({"namespace": "openshift-ptp"})
+        if result["success"]:
+            print("✅ Runtime Configs API: PASSED")
+            print(f"   - Pod: {result.get('pod_name', 'N/A')}")
+            for profile, path in result.get("profiles", {}).items():
+                print(f"   - Profile '{profile}' -> {path}")
+            tests_passed += 1
+        else:
+            print(f"❌ Runtime Configs API: FAILED - {result.get('error', 'Unknown error')}")
+    except Exception as e:
+        print(f"❌ Runtime Configs API: FAILED - {str(e)}")
+
+    # Test 11: PMC Query with profile_name
+    print("\n1️⃣1️⃣ Testing PMC Query with profile_name...")
+    total_tests += 1
+    try:
+        configs = await tools.get_ptp_runtime_configs({"namespace": "openshift-ptp"})
+        if configs["success"] and configs.get("profiles"):
+            first_profile = next(iter(configs["profiles"]))
+            result = await tools.run_pmc_query({"command": "CURRENT_DATA_SET", "profile_name": first_profile})
+            if result["success"]:
+                print("✅ PMC Query (profile_name): PASSED")
+                print(f"   - Profile: {first_profile}")
+                print(f"   - Config File: {result.get('config_file', 'N/A')}")
+                data = result.get("data", {})
+                print(f"   - Steps Removed: {data.get('steps_removed', 'N/A')}")
+                tests_passed += 1
+            else:
+                print(f"❌ PMC Query (profile_name): FAILED - {result.get('error', 'Unknown error')}")
+        else:
+            print(f"❌ PMC Query (profile_name): SKIPPED - no profiles found")
+    except Exception as e:
+        print(f"❌ PMC Query (profile_name): FAILED - {str(e)}")
+
     # Summary
     print("\n" + "=" * 50)
     print("📊 TEST SUMMARY")
@@ -177,6 +215,7 @@ async def quick_test():
         print("   • check_ptp_health() - Comprehensive health check")
         print("   • query_ptp() - Natural language interface")
         print("   • run_pmc_query() - PMC management queries")
+        print("   • get_ptp_runtime_configs() - Profile to config file mapping")
         
         print("\n🔧 Next Steps:")
         print("   1. Start the MCP server: python ptp_mcp_server.py")

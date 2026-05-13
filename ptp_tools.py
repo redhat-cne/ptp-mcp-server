@@ -5,6 +5,7 @@ PTP Tools - Implementation of MCP tools for PTP monitoring
 
 import json
 import logging
+import re
 import subprocess
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
@@ -491,12 +492,84 @@ class PTPTools:
                 "suggestions": self.query_engine.suggest_queries()
             }
 
+    def _get_runtime_config_mapping(self, namespace: str, pod_name: str, kubeconfig_path: Optional[str] = None) -> Dict[str, str]:
+        """Get mapping of profile names to runtime config file paths in a daemon pod."""
+        cmd = build_oc_command(kubeconfig_path)
+        cmd.extend([
+            "exec", "-n", namespace, pod_name,
+            "-c", "linuxptp-daemon-container", "--",
+            "sh", "-c",
+            "for f in /var/run/ptp4l.*.config; do echo \"$f:$(head -1 $f)\"; done"
+        ])
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            raise Exception(f"Failed to list config files: {result.stderr}")
+
+        mapping = {}
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split(":", 1)
+            if len(parts) == 2:
+                filepath = parts[0]
+                header = parts[1]
+                match = re.match(r"#profile:\s*(.+)", header)
+                if match:
+                    mapping[match.group(1).strip()] = filepath
+
+        return mapping
+
+    def _get_first_daemon_pod(self, namespace: str, kubeconfig_path: Optional[str] = None) -> str:
+        """Get the name of the first linuxptp daemon pod."""
+        pod_cmd = build_oc_command(kubeconfig_path)
+        pod_cmd.extend([
+            "get", "pods", "-n", namespace,
+            "-l", "app=linuxptp-daemon",
+            "-o", "jsonpath={.items[0].metadata.name}"
+        ])
+        pod_result = subprocess.run(pod_cmd, capture_output=True, text=True, timeout=30)
+        if pod_result.returncode != 0:
+            raise Exception(f"Failed to get pod name: {pod_result.stderr}")
+        return pod_result.stdout.strip()
+
+    async def get_ptp_runtime_configs(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Look up runtime config file paths from PTP profile names."""
+        try:
+            namespace = arguments.get("namespace", "openshift-ptp")
+            kubeconfig = arguments.get("kubeconfig")
+
+            with kubeconfig_from_base64(kubeconfig) as kubeconfig_path:
+                pod_name = self._get_first_daemon_pod(namespace, kubeconfig_path)
+                mapping = self._get_runtime_config_mapping(namespace, pod_name, kubeconfig_path)
+
+            return {
+                "success": True,
+                "pod_name": pod_name,
+                "profiles": mapping
+            }
+
+        except subprocess.TimeoutExpired:
+            return {
+                "success": False,
+                "error": "Timed out querying daemon pod",
+                "profiles": {}
+            }
+        except Exception as e:
+            logger.error(f"Error getting runtime configs: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e),
+                "profiles": {}
+            }
+
     async def run_pmc_query(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """Execute PMC (PTP Management Client) queries for real-time data"""
         try:
             namespace = arguments.get("namespace", "openshift-ptp")
             command = arguments.get("command", "PARENT_DATA_SET")
-            config_file = arguments.get("config_file", "/var/run/ptp4l.0.config")
+            config_file = arguments.get("config_file")
+            profile_name = arguments.get("profile_name")
             kubeconfig = arguments.get("kubeconfig")
 
             valid_commands = [
@@ -516,17 +589,20 @@ class PTPTools:
                 }
 
             with kubeconfig_from_base64(kubeconfig) as kubeconfig_path:
-                pod_cmd = build_oc_command(kubeconfig_path)
-                pod_cmd.extend([
-                    "get", "pods", "-n", namespace,
-                    "-l", "app=linuxptp-daemon",
-                    "-o", "jsonpath={.items[0].metadata.name}"
-                ])
-                pod_result = subprocess.run(pod_cmd, capture_output=True, text=True, timeout=30)
-                if pod_result.returncode != 0:
-                    raise Exception(f"Failed to get pod name: {pod_result.stderr}")
+                pod_name = self._get_first_daemon_pod(namespace, kubeconfig_path)
 
-                pod_name = pod_result.stdout.strip()
+                if profile_name:
+                    mapping = self._get_runtime_config_mapping(namespace, pod_name, kubeconfig_path)
+                    if profile_name not in mapping:
+                        available = list(mapping.keys())
+                        return {
+                            "success": False,
+                            "error": f"Profile '{profile_name}' not found. Available profiles: {available}",
+                            "data": {}
+                        }
+                    config_file = mapping[profile_name]
+                elif not config_file:
+                    config_file = "/var/run/ptp4l.0.config"
 
                 pmc_cmd = build_oc_command(kubeconfig_path)
                 pmc_cmd.extend([
@@ -544,6 +620,7 @@ class PTPTools:
             return {
                 "success": True,
                 "command": command,
+                "config_file": config_file,
                 "raw_output": pmc_result.stdout,
                 **parsed_data
             }
