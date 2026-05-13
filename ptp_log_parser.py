@@ -497,82 +497,67 @@ class PTPLogParser:
 
     def parse_pmc_output(self, pmc_output: str) -> Dict[str, Any]:
         """Parse PMC command output into structured data"""
-        result = {"data": {}}
+        data = {}
 
         match = re.search(self.extended_patterns["pmc_grandmaster_identity"], pmc_output)
         if match:
-            result["grandmaster_identity"] = match.group(1)
-            result["data"]["grandmaster_identity"] = match.group(1)
+            data["grandmaster_identity"] = match.group(1)
 
         match = re.search(self.extended_patterns["pmc_clock_class"], pmc_output)
         if match:
-            result["grandmaster_clock_class"] = int(match.group(1))
-            result["data"]["grandmaster_clock_class"] = int(match.group(1))
+            data["grandmaster_clock_class"] = int(match.group(1))
 
         match = re.search(self.extended_patterns["pmc_clock_accuracy"], pmc_output)
         if match:
-            result["grandmaster_clock_accuracy"] = match.group(1)
-            result["data"]["grandmaster_clock_accuracy"] = match.group(1)
+            data["grandmaster_clock_accuracy"] = match.group(1)
 
         match = re.search(self.extended_patterns["pmc_priority1"], pmc_output)
         if match:
-            result["grandmaster_priority1"] = int(match.group(1))
-            result["data"]["grandmaster_priority1"] = int(match.group(1))
+            data["grandmaster_priority1"] = int(match.group(1))
 
         match = re.search(self.extended_patterns["pmc_priority2"], pmc_output)
         if match:
-            result["grandmaster_priority2"] = int(match.group(1))
-            result["data"]["grandmaster_priority2"] = int(match.group(1))
+            data["grandmaster_priority2"] = int(match.group(1))
 
         match = re.search(self.extended_patterns["pmc_parent_port"], pmc_output)
         if match:
-            result["parent_port_identity"] = match.group(1)
-            result["data"]["parent_port_identity"] = match.group(1)
+            data["parent_port_identity"] = match.group(1)
 
         match = re.search(r"stepsRemoved\s+(\d+)", pmc_output)
         if match:
-            result["steps_removed"] = int(match.group(1))
-            result["data"]["steps_removed"] = int(match.group(1))
+            data["steps_removed"] = int(match.group(1))
 
         match = re.search(r"offsetFromMaster\s+(-?[\d.]+)", pmc_output)
         if match:
-            result["offset_from_master"] = float(match.group(1))
-            result["data"]["offset_from_master"] = float(match.group(1))
+            data["offset_from_master"] = float(match.group(1))
 
         match = re.search(r"meanPathDelay\s+(-?[\d.]+)", pmc_output)
         if match:
-            result["mean_path_delay"] = float(match.group(1))
-            result["data"]["mean_path_delay"] = float(match.group(1))
+            data["mean_path_delay"] = float(match.group(1))
 
         match = re.search(r"portIdentity\s+([a-f0-9.-]+)", pmc_output)
         if match:
-            result["port_identity"] = match.group(1)
-            result["data"]["port_identity"] = match.group(1)
+            data["port_identity"] = match.group(1)
 
         match = re.search(r"portState\s+(\w+)", pmc_output)
         if match:
-            result["port_state"] = match.group(1)
-            result["data"]["port_state"] = match.group(1)
+            data["port_state"] = match.group(1)
 
         match = re.search(r"logMinDelayReqInterval\s+(-?\d+)", pmc_output)
         if match:
-            result["log_min_delay_req_interval"] = int(match.group(1))
-            result["data"]["log_min_delay_req_interval"] = int(match.group(1))
+            data["log_min_delay_req_interval"] = int(match.group(1))
 
         match = re.search(r"logSyncInterval\s+(-?\d+)", pmc_output)
         if match:
-            result["log_sync_interval"] = int(match.group(1))
-            result["data"]["log_sync_interval"] = int(match.group(1))
+            data["log_sync_interval"] = int(match.group(1))
 
         match = re.search(r"logAnnounceInterval\s+(-?\d+)", pmc_output)
         if match:
-            result["log_announce_interval"] = int(match.group(1))
-            result["data"]["log_announce_interval"] = int(match.group(1))
+            data["log_announce_interval"] = int(match.group(1))
 
         match = re.search(r"delayMechanism\s+(\d+)", pmc_output)
         if match:
             delay_mech = int(match.group(1))
-            result["delay_mechanism"] = delay_mech
-            result["data"]["delay_mechanism"] = "E2E" if delay_mech == 1 else "P2P" if delay_mech == 2 else str(delay_mech)
+            data["delay_mechanism"] = "E2E" if delay_mech == 1 else "P2P" if delay_mech == 2 else str(delay_mech)
 
-        return result
+        return {"data": data}
