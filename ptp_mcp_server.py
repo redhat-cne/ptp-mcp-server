@@ -260,7 +260,57 @@ class PTPMCPServer:
                         },
                         "required": ["question"]
                     }
-                )
+                ),
+                Tool(
+                    name="run_pmc_query",
+                    description="Execute PMC (PTP Management Client) queries for real-time PTP data",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "command": {
+                                "type": "string",
+                                "enum": ["PARENT_DATA_SET", "DEFAULT_DATA_SET", "CURRENT_DATA_SET", "TIME_PROPERTIES_DATA_SET", "PORT_DATA_SET", "GRANDMASTER_SETTINGS_NP"],
+                                "default": "PARENT_DATA_SET",
+                                "description": "PMC command to execute"
+                            },
+                            "namespace": {
+                                "type": "string",
+                                "default": "openshift-ptp",
+                                "description": "Kubernetes namespace"
+                            },
+                            "profile_name": {
+                                "type": "string",
+                                "description": "PTP profile name (e.g., 'slave', 'grandmaster'). Use get_ptp_runtime_configs to discover available profiles. If provided, the matching config file is resolved automatically."
+                            },
+                            "config_file": {
+                                "type": "string",
+                                "description": "Path to ptp4l config file in the pod (e.g., '/var/run/ptp4l.0.config'). Use profile_name instead when possible. If neither is provided, defaults to /var/run/ptp4l.0.config."
+                            },
+                            "kubeconfig": {
+                                "type": "string",
+                                "description": "MUST be base64-encoded kubeconfig content. To target a different cluster, the kubeconfig file must first be base64 encoded using: cat kubeconfig.yaml | base64 -w0. Then pass the resulting base64 string here. Optional - if not provided, uses the default cluster."
+                            }
+                        }
+                    }
+                ),
+                Tool(
+                    name="get_ptp_runtime_configs",
+                    description="Look up PTP runtime config file paths from profile names. Returns a mapping of profile names to their config file paths inside the linuxptp daemon pod. Useful for discovering which profiles are active and resolving profile names to config file paths for use with run_pmc_query.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "namespace": {
+                                "type": "string",
+                                "default": "openshift-ptp",
+                                "description": "Namespace containing PTP daemon"
+                            },
+                            "kubeconfig": {
+                                "type": "string",
+                                "description": "MUST be base64-encoded kubeconfig content. To target a different cluster, the kubeconfig file must first be base64 encoded using: cat kubeconfig.yaml | base64 -w0. Then pass the resulting base64 string here. Optional - if not provided, uses the default cluster."
+                            }
+                        }
+                    }
+                ),
             ]
             return ListToolsResult(tools=tools)
 
@@ -286,6 +336,10 @@ class PTPMCPServer:
                     result = await self.ptp_tools.check_ptp_health(arguments)
                 elif name == "query_ptp":
                     result = await self.ptp_tools.query_ptp(arguments)
+                elif name == "run_pmc_query":
+                    result = await self.ptp_tools.run_pmc_query(arguments)
+                elif name == "get_ptp_runtime_configs":
+                    result = await self.ptp_tools.get_ptp_runtime_configs(arguments)
                 else:
                     raise ValueError(f"Unknown tool: {name}")
 
