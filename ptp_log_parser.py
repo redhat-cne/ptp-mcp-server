@@ -136,12 +136,15 @@ class PTPLogParser:
             for comp_name, pattern in self.patterns.items():
                 if comp_name in ["timestamp", "go_log"]:
                     continue
-                    
+
                 match = re.match(pattern, line)
                 if match:
                     component = comp_name
+                    config_tag = match.group(2)
                     message = match.group(3)
                     parsed_data = self._parse_component_message(message, component)
+                    config_file = config_tag.rsplit(":", 1)[0] if ":" in config_tag else config_tag
+                    parsed_data["config_tag"] = config_file
                     break
         
         return LogEntry(
@@ -192,15 +195,16 @@ class PTPLogParser:
         if state_match:
             parsed["dpll_state"] = state_match.group(1)
         
-        # Extract decision information
-        decision_match = re.search(r"decision: Status (\d+), Offset (-?\d+), In spec (\w+), Source GNSS lost (\w+), On holdover (\w+)", message)
-        if decision_match:
-            parsed["status"] = int(decision_match.group(1))
-            parsed["offset"] = int(decision_match.group(2))
-            parsed["in_spec"] = decision_match.group(3) == "true"
-            parsed["source_lost"] = decision_match.group(4) == "true"
-            parsed["on_holdover"] = decision_match.group(5) == "true"
-        
+        # Extract dpll event information
+        # Format: "dpll event sent for (ens8f0): state s2, Offset 1, In spec true, Source ptp4l lost false, On holdover false"
+        event_match = re.search(r"state (\w+), Offset (-?\d+), In spec (\w+), Source \w+ lost (\w+), On holdover (\w+)", message)
+        if event_match:
+            parsed["state"] = event_match.group(1)
+            parsed["offset"] = int(event_match.group(2))
+            parsed["in_spec"] = event_match.group(3) == "true"
+            parsed["source_lost"] = event_match.group(4) == "true"
+            parsed["on_holdover"] = event_match.group(5) == "true"
+
         return parsed
     
     def _parse_gnss_message(self, message: str) -> Dict[str, Any]:
@@ -365,6 +369,20 @@ class PTPLogParser:
         
         return parsed
     
+    def _filter_by_config_tags(self, logs: List[LogEntry], config_tags: Optional[set]) -> List[LogEntry]:
+        """Filter logs to only those matching a set of config tags.
+
+        A single profile may span multiple config files (ptp4l, ts2phc,
+        phc2sys), so config_tags is a set. Logs without a config_tag
+        (e.g., Go-style logs) are always included since they are not
+        profile-specific.
+        """
+        if not config_tags:
+            return logs
+        return [log for log in logs
+                if "config_tag" not in log.parsed_data
+                or log.parsed_data["config_tag"] in config_tags]
+
     def search_logs(self, logs: List[LogEntry], query: str, time_range: str = None, log_level: str = None) -> List[LogEntry]:
         """Search logs for specific patterns"""
         filtered_logs = logs
@@ -416,8 +434,9 @@ class PTPLogParser:
         # Default to last hour
         return now - timedelta(hours=1)
     
-    def extract_grandmaster_info(self, logs: List[LogEntry]) -> Dict[str, Any]:
+    def extract_grandmaster_info(self, logs: List[LogEntry], config_tags: Optional[set] = None) -> Dict[str, Any]:
         """Extract grandmaster information from logs"""
+        logs = self._filter_by_config_tags(logs, config_tags)
         gm_info = {
             "status": "unknown",
             "interface": None,
@@ -425,7 +444,7 @@ class PTPLogParser:
             "offset": None,
             "frequency": None
         }
-        
+
         # Look for GM status messages
         gm_logs = [log for log in logs if log.component == "gm"]
         if gm_logs:
@@ -433,18 +452,19 @@ class PTPLogParser:
             gm_info["status"] = latest_gm.parsed_data.get("gm_status", "unknown")
             gm_info["interface"] = latest_gm.parsed_data.get("interface")
             gm_info["last_seen"] = latest_gm.timestamp
-        
+
         # Look for phc2sys offset information
         phc2sys_logs = [log for log in logs if log.component == "phc2sys"]
         if phc2sys_logs:
             latest_phc2sys = max(phc2sys_logs, key=lambda x: x.timestamp)
             gm_info["offset"] = latest_phc2sys.parsed_data.get("offset")
             gm_info["frequency"] = latest_phc2sys.parsed_data.get("frequency")
-        
+
         return gm_info
     
-    def extract_sync_status(self, logs: List[LogEntry]) -> Dict[str, Any]:
+    def extract_sync_status(self, logs: List[LogEntry], config_tags: Optional[set] = None) -> Dict[str, Any]:
         """Extract synchronization status from logs"""
+        logs = self._filter_by_config_tags(logs, config_tags)
         sync_status = {
             "dpll_locked": False,
             "gnss_available": False,
@@ -452,16 +472,26 @@ class PTPLogParser:
             "last_offset": None,
             "last_update": None
         }
-        
-        # Look for DPLL decision messages
-        dpll_logs = [log for log in logs if "dpll" in log.component.lower() and "decision" in log.message]
+
+        # Look for DPLL status from component logs (dpll[...]:[...] format)
+        dpll_logs = [log for log in logs if log.component == "dpll" and "phase_status" in log.parsed_data]
         if dpll_logs:
             latest_dpll = max(dpll_logs, key=lambda x: x.timestamp)
             parsed = latest_dpll.parsed_data
-            sync_status["dpll_locked"] = parsed.get("status", 0) == 3
-            sync_status["offset_in_range"] = parsed.get("in_spec", False)
+            # phase_status 3 = locked
+            sync_status["dpll_locked"] = parsed.get("phase_status") == 3
             sync_status["last_offset"] = parsed.get("offset")
             sync_status["last_update"] = latest_dpll.timestamp
+
+        # Look for DPLL event logs (Go-style) for in_spec status
+        dpll_event_logs = [log for log in logs if "dpll" in log.component.lower() and "in_spec" in log.parsed_data]
+        if dpll_event_logs:
+            latest_event = max(dpll_event_logs, key=lambda x: x.timestamp)
+            sync_status["offset_in_range"] = latest_event.parsed_data.get("in_spec", False)
+            if not dpll_logs:
+                sync_status["dpll_locked"] = latest_event.parsed_data.get("state") == "s2"
+                sync_status["last_offset"] = latest_event.parsed_data.get("offset")
+                sync_status["last_update"] = latest_event.timestamp
         
         # Look for GNSS status
         gnss_logs = [log for log in logs if "gnss" in log.component.lower()]
@@ -471,8 +501,9 @@ class PTPLogParser:
         
         return sync_status
     
-    def extract_clock_hierarchy(self, logs: List[LogEntry]) -> Dict[str, Any]:
+    def extract_clock_hierarchy(self, logs: List[LogEntry], config_tags: Optional[set] = None) -> Dict[str, Any]:
         """Extract clock hierarchy information from logs"""
+        logs = self._filter_by_config_tags(logs, config_tags)
         hierarchy = {
             "grandmaster": None,
             "boundary_clocks": [],

@@ -43,7 +43,6 @@ async def quick_test():
         if result["success"]:
             print("✅ Logs API: PASSED")
             print(f"   - Logs Count: {result.get('logs_count', 0)}")
-            print(f"   - Grandmaster: {result.get('grandmaster', {}).get('status', 'unknown')}")
             tests_passed += 1
         else:
             print(f"❌ Logs API: FAILED - {result.get('error', 'Unknown error')}")
@@ -195,6 +194,26 @@ async def quick_test():
             print(f"❌ PMC Query (profile_name): SKIPPED - no profiles found")
     except Exception as e:
         print(f"❌ PMC Query (profile_name): FAILED - {str(e)}")
+
+    # Test 12: Profile-filtered log analysis
+    print("\n1️⃣2️⃣ Testing profile-filtered log analysis...")
+    total_tests += 1
+    try:
+        configs = await tools.get_ptp_runtime_configs({"namespace": "openshift-ptp"})
+        if configs["success"] and configs.get("profiles"):
+            first_profile = next(iter(configs["profiles"]))
+            result = await tools.get_grandmaster_status({"profile_name": first_profile})
+            if result["success"]:
+                print("✅ Profile-filtered log analysis: PASSED")
+                print(f"   - Profile: {first_profile}")
+                print(f"   - GM Status: {result.get('grandmaster', {}).get('status', 'unknown')}")
+                tests_passed += 1
+            else:
+                print(f"❌ Profile-filtered log analysis: FAILED - {result.get('error', 'Unknown error')}")
+        else:
+            print(f"❌ Profile-filtered log analysis: SKIPPED - no profiles found")
+    except Exception as e:
+        print(f"❌ Profile-filtered log analysis: FAILED - {str(e)}")
 
     # Summary
     print("\n" + "=" * 50)
