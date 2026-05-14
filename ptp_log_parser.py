@@ -195,15 +195,16 @@ class PTPLogParser:
         if state_match:
             parsed["dpll_state"] = state_match.group(1)
         
-        # Extract decision information
-        decision_match = re.search(r"decision: Status (\d+), Offset (-?\d+), In spec (\w+), Source GNSS lost (\w+), On holdover (\w+)", message)
-        if decision_match:
-            parsed["status"] = int(decision_match.group(1))
-            parsed["offset"] = int(decision_match.group(2))
-            parsed["in_spec"] = decision_match.group(3) == "true"
-            parsed["source_lost"] = decision_match.group(4) == "true"
-            parsed["on_holdover"] = decision_match.group(5) == "true"
-        
+        # Extract dpll event information
+        # Format: "dpll event sent for (ens8f0): state s2, Offset 1, In spec true, Source ptp4l lost false, On holdover false"
+        event_match = re.search(r"state (\w+), Offset (-?\d+), In spec (\w+), Source \w+ lost (\w+), On holdover (\w+)", message)
+        if event_match:
+            parsed["state"] = event_match.group(1)
+            parsed["offset"] = int(event_match.group(2))
+            parsed["in_spec"] = event_match.group(3) == "true"
+            parsed["source_lost"] = event_match.group(4) == "true"
+            parsed["on_holdover"] = event_match.group(5) == "true"
+
         return parsed
     
     def _parse_gnss_message(self, message: str) -> Dict[str, Any]:
@@ -471,16 +472,26 @@ class PTPLogParser:
             "last_offset": None,
             "last_update": None
         }
-        
-        # Look for DPLL decision messages
-        dpll_logs = [log for log in logs if "dpll" in log.component.lower() and "decision" in log.message]
+
+        # Look for DPLL status from component logs (dpll[...]:[...] format)
+        dpll_logs = [log for log in logs if log.component == "dpll" and "phase_status" in log.parsed_data]
         if dpll_logs:
             latest_dpll = max(dpll_logs, key=lambda x: x.timestamp)
             parsed = latest_dpll.parsed_data
-            sync_status["dpll_locked"] = parsed.get("status", 0) == 3
-            sync_status["offset_in_range"] = parsed.get("in_spec", False)
+            # phase_status 3 = locked
+            sync_status["dpll_locked"] = parsed.get("phase_status") == 3
             sync_status["last_offset"] = parsed.get("offset")
             sync_status["last_update"] = latest_dpll.timestamp
+
+        # Look for DPLL event logs (Go-style) for in_spec status
+        dpll_event_logs = [log for log in logs if "dpll" in log.component.lower() and "in_spec" in log.parsed_data]
+        if dpll_event_logs:
+            latest_event = max(dpll_event_logs, key=lambda x: x.timestamp)
+            sync_status["offset_in_range"] = latest_event.parsed_data.get("in_spec", False)
+            if not dpll_logs:
+                sync_status["dpll_locked"] = latest_event.parsed_data.get("state") == "s2"
+                sync_status["last_offset"] = latest_event.parsed_data.get("offset")
+                sync_status["last_update"] = latest_event.timestamp
         
         # Look for GNSS status
         gnss_logs = [log for log in logs if "gnss" in log.component.lower()]
