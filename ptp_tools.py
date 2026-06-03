@@ -5,6 +5,7 @@ PTP Tools - Implementation of MCP tools for PTP monitoring
 
 import json
 import logging
+import os
 import re
 import subprocess
 from typing import Dict, List, Optional, Any
@@ -79,23 +80,17 @@ class PTPTools:
             namespace = arguments.get("namespace", "openshift-ptp")
             lines = arguments.get("lines", 1000)
             since = arguments.get("since")
+            profile_name = arguments.get("profile_name")
             kubeconfig = arguments.get("kubeconfig")
 
             with kubeconfig_from_base64(kubeconfig) as kubeconfig_path:
-                # Get logs
+                config_tags = self._resolve_config_tags(profile_name, namespace, kubeconfig_path)
                 logs = await self.log_parser.get_ptp_logs(namespace, lines, since, kubeconfig_path)
-
-                # Extract structured information
-                gm_info = self.log_parser.extract_grandmaster_info(logs)
-                sync_status = self.log_parser.extract_sync_status(logs)
-                clock_hierarchy = self.log_parser.extract_clock_hierarchy(logs)
+                filtered = self.log_parser._filter_by_config_tags(logs, config_tags)
 
                 return {
                     "success": True,
-                    "logs_count": len(logs),
-                    "grandmaster": gm_info,
-                    "sync_status": sync_status,
-                    "clock_hierarchy": clock_hierarchy,
+                    "logs_count": len(filtered),
                     "log_entries": [
                         {
                             "timestamp": log.timestamp.isoformat() if log.timestamp else None,
@@ -104,7 +99,7 @@ class PTPTools:
                             "message": log.message,
                             "parsed_data": log.parsed_data
                         }
-                        for log in logs[-100:]  # Return last 100 entries for brevity
+                        for log in filtered[-100:]
                     ]
                 }
 
@@ -162,12 +157,15 @@ class PTPTools:
         """Get current grandmaster status"""
         try:
             detailed = arguments.get("detailed", False)
+            profile_name = arguments.get("profile_name")
             kubeconfig = arguments.get("kubeconfig")
 
             with kubeconfig_from_base64(kubeconfig) as kubeconfig_path:
+                config_tags = self._resolve_config_tags(profile_name, "openshift-ptp", kubeconfig_path)
+
                 # Get logs to extract grandmaster info
                 logs = await self.log_parser.get_ptp_logs(kubeconfig_path=kubeconfig_path)
-                gm_info = self.log_parser.extract_grandmaster_info(logs)
+                gm_info = self.log_parser.extract_grandmaster_info(logs, config_tags)
 
                 # Get configuration for additional context
                 config_data = await self.config_parser.get_ptp_configs(kubeconfig_path=kubeconfig_path)
@@ -185,7 +183,7 @@ class PTPTools:
 
                 if detailed:
                     # Add more detailed analysis
-                    sync_status = self.log_parser.extract_sync_status(logs)
+                    sync_status = self.log_parser.extract_sync_status(logs, config_tags)
                     result["sync_status"] = sync_status
 
                     # Analyze BMCA state
@@ -207,16 +205,19 @@ class PTPTools:
         try:
             include_offsets = arguments.get("include_offsets", True)
             include_bmca = arguments.get("include_bmca", True)
+            profile_name = arguments.get("profile_name")
             kubeconfig = arguments.get("kubeconfig")
 
             with kubeconfig_from_base64(kubeconfig) as kubeconfig_path:
+                config_tags = self._resolve_config_tags(profile_name, "openshift-ptp", kubeconfig_path)
+
                 # Get logs and configuration
                 logs = await self.log_parser.get_ptp_logs(kubeconfig_path=kubeconfig_path)
                 config_data = await self.config_parser.get_ptp_configs(kubeconfig_path=kubeconfig_path)
                 ptp_config = self.model.create_ptp_configuration(config_data)
 
                 # Extract sync status
-                sync_status = self.log_parser.extract_sync_status(logs)
+                sync_status = self.log_parser.extract_sync_status(logs, config_tags)
 
                 # Analyze sync status using model
                 model_sync_status = self.model.analyze_sync_status(ptp_config, logs)
@@ -257,9 +258,12 @@ class PTPTools:
         try:
             include_ports = arguments.get("include_ports", True)
             include_priorities = arguments.get("include_priorities", True)
+            profile_name = arguments.get("profile_name")
             kubeconfig = arguments.get("kubeconfig")
 
             with kubeconfig_from_base64(kubeconfig) as kubeconfig_path:
+                config_tags = self._resolve_config_tags(profile_name, "openshift-ptp", kubeconfig_path)
+
                 # Get logs and configuration
                 logs = await self.log_parser.get_ptp_logs(kubeconfig_path=kubeconfig_path)
                 config_data = await self.config_parser.get_ptp_configs(kubeconfig_path=kubeconfig_path)
@@ -269,7 +273,7 @@ class PTPTools:
                 hierarchy = self.model.get_clock_hierarchy(ptp_config, logs)
 
                 # Add log-based hierarchy info
-                log_hierarchy = self.log_parser.extract_clock_hierarchy(logs)
+                log_hierarchy = self.log_parser.extract_clock_hierarchy(logs, config_tags)
                 hierarchy.update(log_hierarchy)
 
                 result = {
@@ -310,9 +314,11 @@ class PTPTools:
             check_config = arguments.get("check_config", True)
             check_sync = arguments.get("check_sync", True)
             check_logs = arguments.get("check_logs", True)
+            profile_name = arguments.get("profile_name")
             kubeconfig = arguments.get("kubeconfig")
 
             with kubeconfig_from_base64(kubeconfig) as kubeconfig_path:
+                config_tags = self._resolve_config_tags(profile_name, "openshift-ptp", kubeconfig_path)
                 health_result = {
                     "success": True,
                     "overall_status": "unknown",
@@ -343,7 +349,7 @@ class PTPTools:
                 if check_sync:
                     try:
                         logs = await self.log_parser.get_ptp_logs(kubeconfig_path=kubeconfig_path)
-                        sync_status = self.log_parser.extract_sync_status(logs)
+                        sync_status = self.log_parser.extract_sync_status(logs, config_tags)
 
                         health_result["checks"]["synchronization"] = {
                             "dpll_locked": sync_status.get("dpll_locked", False),
@@ -360,10 +366,11 @@ class PTPTools:
                 if check_logs:
                     try:
                         logs = await self.log_parser.get_ptp_logs(kubeconfig_path=kubeconfig_path)
+                        filtered = self.log_parser._filter_by_config_tags(logs, config_tags)
 
                         # Look for error and warning messages
-                        error_logs = [log for log in logs if log.level == "error"]
-                        warning_logs = [log for log in logs if log.level == "warning"]
+                        error_logs = [log for log in filtered if log.level == "error"]
+                        warning_logs = [log for log in filtered if log.level == "warning"]
 
                         health_result["checks"]["logs"] = {
                             "total_logs": len(logs),
@@ -492,20 +499,24 @@ class PTPTools:
                 "suggestions": self.query_engine.suggest_queries()
             }
 
-    def _get_runtime_config_mapping(self, namespace: str, pod_name: str, kubeconfig_path: Optional[str] = None) -> Dict[str, str]:
-        """Get mapping of profile names to runtime config file paths in a daemon pod."""
+    def _get_runtime_config_mapping(self, namespace: str, pod_name: str, kubeconfig_path: Optional[str] = None) -> Dict[str, List[str]]:
+        """Get mapping of profile names to runtime config file paths in a daemon pod.
+
+        Scans all config files (ptp4l, ts2phc, phc2sys) and groups them by
+        profile name from the #profile: header.
+        """
         cmd = build_oc_command(kubeconfig_path)
         cmd.extend([
             "exec", "-n", namespace, pod_name,
             "-c", "linuxptp-daemon-container", "--",
             "sh", "-c",
-            "for f in /var/run/ptp4l.*.config; do echo \"$f:$(head -1 $f)\"; done"
+            "for f in /var/run/ptp4l.*.config /var/run/ts2phc.*.config /var/run/phc2sys.*.config; do [ -f \"$f\" ] && echo \"$f:$(head -1 $f)\"; done"
         ])
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         if result.returncode != 0:
             raise Exception(f"Failed to list config files: {result.stderr}")
 
-        mapping = {}
+        mapping: Dict[str, List[str]] = {}
         for line in result.stdout.splitlines():
             line = line.strip()
             if not line:
@@ -516,7 +527,8 @@ class PTPTools:
                 header = parts[1]
                 match = re.match(r"#profile:\s*(.+)", header)
                 if match:
-                    mapping[match.group(1).strip()] = filepath
+                    profile = match.group(1).strip()
+                    mapping.setdefault(profile, []).append(filepath)
 
         return mapping
 
@@ -532,6 +544,24 @@ class PTPTools:
         if pod_result.returncode != 0:
             raise Exception(f"Failed to get pod name: {pod_result.stderr}")
         return pod_result.stdout.strip()
+
+    def _resolve_config_tags(self, profile_name: Optional[str], namespace: str, kubeconfig_path: Optional[str] = None) -> Optional[set]:
+        """Resolve a profile name to the set of config_tags used in log lines.
+
+        A single profile may have multiple config files (ptp4l, ts2phc,
+        phc2sys). Returns the basenames (e.g., {'ptp4l.1.config',
+        'ts2phc.1.config', 'phc2sys.1.config'}) which match the config_tag
+        stored in parsed log entries.
+        Returns None if profile_name is not provided.
+        """
+        if not profile_name:
+            return None
+        pod_name = self._get_first_daemon_pod(namespace, kubeconfig_path)
+        mapping = self._get_runtime_config_mapping(namespace, pod_name, kubeconfig_path)
+        if profile_name not in mapping:
+            available = list(mapping.keys())
+            raise ValueError(f"Profile '{profile_name}' not found. Available profiles: {available}")
+        return {os.path.basename(p) for p in mapping[profile_name]}
 
     async def get_ptp_runtime_configs(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """Look up runtime config file paths from PTP profile names."""
@@ -600,7 +630,14 @@ class PTPTools:
                             "error": f"Profile '{profile_name}' not found. Available profiles: {available}",
                             "data": {}
                         }
-                    config_file = mapping[profile_name]
+                    ptp4l_configs = [p for p in mapping[profile_name] if "ptp4l" in os.path.basename(p)]
+                    if not ptp4l_configs:
+                        return {
+                            "success": False,
+                            "error": f"No ptp4l config found for profile '{profile_name}'",
+                            "data": {}
+                        }
+                    config_file = ptp4l_configs[0]
                 elif not config_file:
                     config_file = "/var/run/ptp4l.0.config"
 

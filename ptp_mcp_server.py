@@ -95,7 +95,7 @@ class PTPMCPServer:
                 ),
                 Tool(
                     name="get_ptp_logs",
-                    description="Get linuxptp daemon logs from OpenShift cluster",
+                    description="Get raw linuxptp daemon log entries from OpenShift cluster. Use dedicated tools (get_grandmaster_status, analyze_sync_status, get_clock_hierarchy) for structured analysis.",
                     inputSchema={
                         "type": "object",
                         "properties": {
@@ -112,6 +112,10 @@ class PTPMCPServer:
                             "since": {
                                 "type": "string",
                                 "description": "Time since to get logs (e.g., '1h', '30m')"
+                            },
+                            "profile_name": {
+                                "type": "string",
+                                "description": "PTP profile name to filter results (e.g., 'slave', 'grandmaster'). Use get_ptp_runtime_configs to discover available profiles."
                             },
                             "kubeconfig": {
                                 "type": "string",
@@ -158,6 +162,10 @@ class PTPMCPServer:
                                 "default": False,
                                 "description": "Include detailed grandmaster information"
                             },
+                            "profile_name": {
+                                "type": "string",
+                                "description": "PTP profile name to filter results (e.g., 'slave', 'grandmaster'). Use get_ptp_runtime_configs to discover available profiles."
+                            },
                             "kubeconfig": {
                                 "type": "string",
                                 "description": "MUST be base64-encoded kubeconfig content. To target a different cluster, the kubeconfig file must first be base64 encoded using: cat kubeconfig.yaml | base64 -w0. Then pass the resulting base64 string here. Optional - if not provided, uses the default cluster."
@@ -181,6 +189,10 @@ class PTPMCPServer:
                                 "default": True,
                                 "description": "Include BMCA state analysis"
                             },
+                            "profile_name": {
+                                "type": "string",
+                                "description": "PTP profile name to filter results (e.g., 'slave', 'grandmaster'). Use get_ptp_runtime_configs to discover available profiles."
+                            },
                             "kubeconfig": {
                                 "type": "string",
                                 "description": "MUST be base64-encoded kubeconfig content. To target a different cluster, the kubeconfig file must first be base64 encoded using: cat kubeconfig.yaml | base64 -w0. Then pass the resulting base64 string here. Optional - if not provided, uses the default cluster."
@@ -203,6 +215,10 @@ class PTPMCPServer:
                                 "type": "boolean",
                                 "default": True,
                                 "description": "Include priority information"
+                            },
+                            "profile_name": {
+                                "type": "string",
+                                "description": "PTP profile name to filter results (e.g., 'slave', 'grandmaster'). Use get_ptp_runtime_configs to discover available profiles."
                             },
                             "kubeconfig": {
                                 "type": "string",
@@ -231,6 +247,10 @@ class PTPMCPServer:
                                 "type": "boolean",
                                 "default": True,
                                 "description": "Check for log errors and warnings"
+                            },
+                            "profile_name": {
+                                "type": "string",
+                                "description": "PTP profile name to filter results (e.g., 'slave', 'grandmaster'). Use get_ptp_runtime_configs to discover available profiles."
                             },
                             "kubeconfig": {
                                 "type": "string",

@@ -291,18 +291,17 @@ class PTPQueryEngine:
         response = "Synchronization Status:\n"
         
         dpll_locked = sync_status.get("dpll_locked", False)
-        gnss_available = sync_status.get("gnss_available", False)
         offset_in_range = sync_status.get("offset_in_range", False)
+        gnss_available = sync_status.get("gnss_available", False)
         last_offset = sync_status.get("last_offset")
-        
+
         response += f"- DPLL Locked: {'Yes' if dpll_locked else 'No'}\n"
-        response += f"- GNSS Available: {'Yes' if gnss_available else 'No'}\n"
         response += f"- Offset in Range: {'Yes' if offset_in_range else 'No'}\n"
-        
+        response += f"- GNSS Available: {'Yes' if gnss_available else 'No'}\n"
+
         if last_offset is not None:
             response += f"- Last Offset: {last_offset} ns\n"
-        
-        # Overall status
+
         if dpll_locked and offset_in_range:
             response += "\nStatus: HEALTHY - Clock is synchronized"
         elif dpll_locked and not offset_in_range:
