@@ -7,7 +7,7 @@ import json
 import logging
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime, timedelta
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 
 logger = logging.getLogger(__name__)
@@ -16,8 +16,8 @@ class ClockType(Enum):
     """PTP Clock Types"""
     ORDINARY_CLOCK = "OC"
     BOUNDARY_CLOCK = "BC"
-    TRANSPARENT_CLOCK = "TC"
     GRANDMASTER = "GM"
+    TELECOM_BOUNDARY_CLOCK = "T-BC"
 
 class BMCARole(Enum):
     """BMCA (Best Master Clock Algorithm) Roles"""
@@ -33,6 +33,80 @@ class SyncStatus(Enum):
     HOLDOVER = "holdover"
     FREERUN = "freerun"
     UNKNOWN = "unknown"
+
+class PortState(Enum):
+    """PTP Port States (IEEE 1588)"""
+    INITIALIZING = "INITIALIZING"
+    FAULTY = "FAULTY"
+    DISABLED = "DISABLED"
+    LISTENING = "LISTENING"
+    PRE_MASTER = "PRE_MASTER"
+    MASTER = "MASTER"
+    PASSIVE = "PASSIVE"
+    UNCALIBRATED = "UNCALIBRATED"
+    SLAVE = "SLAVE"
+
+class ServoState(Enum):
+    """Servo synchronization states"""
+    UNLOCKED = "s0"      # Not tracking, large offset
+    CLOCK_STEP = "s1"    # Applying large correction
+    LOCKED = "s2"        # Tracking with small corrections
+
+class DPLLState(Enum):
+    """DPLL (Digital Phase-Locked Loop) states"""
+    INVALID = 0
+    INITIALIZING = 1
+    FREERUN = 2
+    LOCKED = 3
+    LOCKED_HO = 4        # Locked with holdover capability
+    HOLDOVER = 5
+
+class GNSSFixQuality(Enum):
+    """GNSS fix quality levels"""
+    NO_FIX = 0
+    FIX_2D = 1
+    FIX_3D = 2
+    FIX_3D_HOLDOVER = 3  # 3D fix with holdover capability
+
+# Clock class descriptions per ITU-T G.8275.1
+CLOCK_CLASS_DESCRIPTIONS = {
+    # T-GM (Telecom Grandmaster) clock classes
+    6: "T-GM locked to PRTC (e.g. GNSS)",
+    7: "T-GM holdover, within holdover specification",
+    # T-BC (Telecom Boundary Clock) clock classes
+    135: "T-BC holdover, within holdover specification",
+    # T-GM holdover, out of holdover specification (by frequency reference quality)
+    140: "T-GM holdover, out of spec, traceable to PRC/PRS",
+    150: "T-GM holdover, out of spec, traceable to SSU-A/ST2",
+    160: "T-GM holdover, out of spec, Category 3 frequency reference",
+    # T-BC holdover, out of holdover specification
+    165: "T-BC holdover, out of holdover specification",
+    # Common
+    248: "Free-running, no valid time reference",
+    255: "Slave-only clock (T-TSC), does not act as master"
+}
+
+# Clock accuracy values (IEEE 1588)
+CLOCK_ACCURACY = {
+    0x20: "25ns",
+    0x21: "100ns",
+    0x22: "250ns",
+    0x23: "1us",
+    0x24: "2.5us",
+    0x25: "10us",
+    0x26: "25us",
+    0x27: "100us",
+    0x28: "250us",
+    0x29: "1ms",
+    0xFE: "Unknown"
+}
+
+# Offset thresholds by profile (nanoseconds)
+OFFSET_THRESHOLDS = {
+    "G.8275.1": {"max": 1500, "warning": 1000},      # FTS
+    "G.8275.2": {"max": 5000, "warning": 3000},      # PTS
+    "default": {"max": 100, "warning": 50}
+}
 
 @dataclass
 class PTPClock:
@@ -62,6 +136,14 @@ class PTPInterface:
     last_update: Optional[datetime] = None
 
 @dataclass
+class ProfileGroup:
+    """A pair of related PTP profiles linked by controllingProfile"""
+    controlling_profile: Dict[str, Any]
+    controlled_profile: Dict[str, Any]
+    clock_type: ClockType
+    has_ts2phc: bool
+
+@dataclass
 class PTPConfiguration:
     """PTP Configuration representation"""
     name: str
@@ -74,6 +156,21 @@ class PTPConfiguration:
     clock_class: int
     sync_intervals: Dict[str, int]
     thresholds: Dict[str, Any]
+    profile_group: Optional['ProfileGroup'] = None
+    has_ts2phc: bool = False
+    warnings: List[str] = field(default_factory=list)
+
+    @property
+    def receiver_profile(self) -> Optional[str]:
+        if self.profile_group is None:
+            return None
+        return self.profile_group.controlling_profile.get("name")
+
+    @property
+    def transmitter_profile(self) -> Optional[str]:
+        if self.profile_group is None:
+            return None
+        return self.profile_group.controlled_profile.get("name")
 
 # Clock class descriptions per ITU-T G.8275.1
 CLOCK_CLASS_DESCRIPTIONS = {
@@ -368,9 +465,22 @@ class PTPModel:
         profiles = spec.get("profile", [])
         recommendations = spec.get("recommend", [])
         
-        # Determine clock type
-        clock_type = self._determine_clock_type(profiles)
-        
+        # Try profile grouping first (T-BC / dual-profile BC detection)
+        profile_group, group_warnings = self._group_profiles(profiles)
+
+        if profile_group is not None:
+            clock_type = profile_group.clock_type
+            has_ts2phc = profile_group.has_ts2phc
+        else:
+            # Check for T-GM before falling back to ptp4l clock_type
+            clock_type = self._detect_grandmaster(profiles)
+            if clock_type is None:
+                clock_type = self._determine_clock_type(profiles)
+            has_ts2phc = any(
+                bool((p.get("ts2phcConf") or "").strip())
+                for p in profiles
+            )
+
         # Extract domain
         domain = self._extract_domain(profiles)
         
@@ -396,20 +506,48 @@ class PTPModel:
             priorities=priorities,
             clock_class=clock_class,
             sync_intervals=sync_intervals,
-            thresholds=thresholds
+            thresholds=thresholds,
+            profile_group=profile_group,
+            has_ts2phc=has_ts2phc,
+            warnings=group_warnings,
         )
     
-    def _determine_clock_type(self, profiles: List[Dict[str, Any]]) -> ClockType:
-        """Determine clock type from profiles"""
+    def _get_profile_clock_type_str(self, profile: Dict[str, Any]) -> str:
+        """Extract ptp4l_clock_type string from a single profile's ptp4lConf."""
+        ptp4l_conf = profile.get("ptp4lConf", {})
+        clock_type_str = ptp4l_conf.get("global", {}).get("ptp4l_clock_type", "")
+        return str(clock_type_str).upper()
+
+    def _detect_grandmaster(self, profiles: List[Dict[str, Any]]) -> Optional[ClockType]:
+        """Detect T-GM: all master ports, ts2phc configured, high clock class.
+
+        Also checks ptpSettings.clockType == "T-GM" as an explicit signal.
+        Returns ClockType.GRANDMASTER if detected, None otherwise.
+        """
         for profile in profiles:
-            ptp4l_conf = profile.get("ptp4lConf", {})
-            clock_conf = ptp4l_conf.get("clock", {})
-            clock_type_str = clock_conf.get("clock_type", "").upper()
-            
+            # Explicit ptpSettings.clockType takes priority
+            if profile.get("ptpSettings", {}).get("clockType") == "T-GM":
+                return ClockType.GRANDMASTER
+
+        # Structural detection: single profile, all-master ports, ts2phc present
+        if len(profiles) == 1:
+            profile = profiles[0]
+            port_role = self._get_profile_port_roles(profile)
+            ts2phc_conf = (profile.get("ts2phcConf") or "").strip()
+            clock_class = profile.get("ptp4lConf", {}).get("global", {}).get("clockClass", 248)
+
+            if port_role == "master-only" and ts2phc_conf and clock_class <= 7:
+                return ClockType.GRANDMASTER
+
+        return None
+
+    def _determine_clock_type(self, profiles: List[Dict[str, Any]]) -> ClockType:
+        """Determine clock type from ptp4l_clock_type in profiles"""
+        for profile in profiles:
+            clock_type_str = self._get_profile_clock_type_str(profile)
+
             if clock_type_str == "BC":
                 return ClockType.BOUNDARY_CLOCK
-            elif clock_type_str == "TC":
-                return ClockType.TRANSPARENT_CLOCK
             elif clock_type_str == "GM":
                 return ClockType.GRANDMASTER
             elif clock_type_str == "OC":
@@ -417,6 +555,101 @@ class PTPModel:
         
         # Default to Ordinary Clock
         return ClockType.ORDINARY_CLOCK
+
+    def _get_profile_port_roles(self, profile: Dict[str, Any]) -> Optional[str]:
+        """Classify a profile's port role based on its interface masterOnly settings.
+
+        Returns "slave-only" if all interfaces have masterOnly 0,
+        "master-only" if all interfaces have masterOnly 1,
+        or None if mixed / no interfaces.
+        """
+        ptp4l_conf = profile.get("ptp4lConf", {})
+        interfaces = ptp4l_conf.get("interfaces", {})
+        if not interfaces:
+            return None
+
+        master_only_values = [
+            iface_conf.get("masterOnly", 0)
+            for iface_conf in interfaces.values()
+        ]
+        if all(v == 0 for v in master_only_values):
+            return "slave-only"
+        if all(v == 1 for v in master_only_values):
+            return "master-only"
+        return None
+
+    def _group_profiles(self, profiles: List[Dict[str, Any]]) -> Tuple[Optional[ProfileGroup], List[str]]:
+        """Scan profiles for controllingProfile links and build a ProfileGroup.
+
+        Returns (ProfileGroup, warnings) or (None, warnings) if no valid group found.
+        """
+        warnings: List[str] = []
+        profiles_by_name = {p.get("name"): p for p in profiles if p.get("name")}
+
+        controlled_profile = None
+        controlling_name = None
+
+        for profile in profiles:
+            cp = profile.get("ptpSettings", {}).get("controllingProfile", "")
+            if cp:
+                controlled_profile = profile
+                controlling_name = cp
+                break
+
+        if controlled_profile is None or controlling_name is None:
+            for profile in profiles:
+                if profile.get("ptpSettings", {}).get("clockType") == "T-BC":
+                    warnings.append(
+                        f"Profile '{profile.get('name')}' has ptpSettings.clockType=T-BC "
+                        "but no controllingProfile link was found"
+                    )
+            return None, warnings
+
+        controlling_profile = profiles_by_name.get(controlling_name)
+        if controlling_profile is None:
+            warnings.append(
+                f"controllingProfile '{controlling_name}' referenced by "
+                f"'{controlled_profile.get('name')}' was not found in this CR; "
+                "treating as single-profile detection"
+            )
+            return None, warnings
+
+        if controlling_profile is controlled_profile:
+            warnings.append(
+                f"controllingProfile '{controlling_name}' references itself; "
+                "treating as single-profile detection"
+            )
+            return None, warnings
+
+        # Validate port roles as consistency check
+        controlling_role = self._get_profile_port_roles(controlling_profile)
+        controlled_role = self._get_profile_port_roles(controlled_profile)
+        if controlling_role and controlling_role != "slave-only":
+            warnings.append(
+                f"Controlling profile '{controlling_name}' was expected to have "
+                f"only slave ports but has role '{controlling_role}'"
+            )
+        if controlled_role and controlled_role != "master-only":
+            warnings.append(
+                f"Controlled profile '{controlled_profile.get('name')}' was expected to have "
+                f"only master ports but has role '{controlled_role}'"
+            )
+
+        ts2phc_conf = controlling_profile.get("ts2phcConf", "") or ""
+        has_ts2phc = bool(ts2phc_conf.strip())
+
+        if has_ts2phc:
+            group_clock_type = ClockType.TELECOM_BOUNDARY_CLOCK
+        else:
+            group_clock_type = ClockType.BOUNDARY_CLOCK
+
+        group = ProfileGroup(
+            controlling_profile=controlling_profile,
+            controlled_profile=controlled_profile,
+            clock_type=group_clock_type,
+            has_ts2phc=has_ts2phc,
+        )
+        return group, warnings
     
     def _extract_domain(self, profiles: List[Dict[str, Any]]) -> int:
         """Extract domain number from profiles"""
@@ -489,10 +722,10 @@ class PTPModel:
         if config.clock_type == ClockType.GRANDMASTER:
             return BMCARole.MASTER
         
-        # Check if this is a boundary clock
-        if config.clock_type == ClockType.BOUNDARY_CLOCK:
-            # Boundary clocks can be master or slave depending on topology
-            # For now, assume slave (could be enhanced with log analysis)
+        # Check if this is a boundary clock (including T-BC)
+        # Boundary clocks can be master or slave depending on topology
+        # For now, assume slave (could be enhanced with log analysis)
+        if config.clock_type in (ClockType.BOUNDARY_CLOCK, ClockType.TELECOM_BOUNDARY_CLOCK):
             return BMCARole.SLAVE
         
         # Ordinary clocks are typically slaves
@@ -592,7 +825,6 @@ class PTPModel:
             "grandmaster": None,
             "boundary_clocks": [],
             "ordinary_clocks": [],
-            "transparent_clocks": [],
             "current_clock": {
                 "type": config.clock_type.value,
                 "domain": config.domain,
