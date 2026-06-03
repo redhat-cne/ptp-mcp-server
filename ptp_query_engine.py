@@ -223,19 +223,22 @@ class PTPQueryEngine:
         
         status = gm_info.get("status", "unknown")
         interface = gm_info.get("interface", "unknown")
-        offset = gm_info.get("offset")
-        frequency = gm_info.get("frequency")
         last_seen = gm_info.get("last_seen")
+        last_offsets = gm_info.get("last_offsets", {})
+        last_frequencies = gm_info.get("last_frequencies", {})
         
         response = f"Current grandmaster status: {status}"
         if interface != "unknown":
             response += f" on interface {interface}"
         
-        if offset is not None:
-            response += f"\nCurrent offset: {offset} ns"
-        
-        if frequency is not None:
-            response += f"\nFrequency adjustment: {frequency} ppb"
+        if last_offsets:
+            response += "\nLatest offsets:"
+            for component, offset_ns in last_offsets.items():
+                freq = last_frequencies.get(component)
+                line = f"\n  - {component}: {offset_ns} ns"
+                if freq is not None:
+                    line += f", freq {freq} ppb"
+                response += line
         
         if last_seen:
             response += f"\nLast seen: {last_seen}"
@@ -293,15 +296,25 @@ class PTPQueryEngine:
         dpll_locked = sync_status.get("dpll_locked", False)
         offset_in_range = sync_status.get("offset_in_range", False)
         gnss_available = sync_status.get("gnss_available", False)
-        last_offset = sync_status.get("last_offset")
+        last_offsets = sync_status.get("last_offsets", {})
+        last_servo_states = sync_status.get("last_servo_states", {})
 
         response += f"- DPLL Locked: {'Yes' if dpll_locked else 'No'}\n"
         response += f"- Offset in Range: {'Yes' if offset_in_range else 'No'}\n"
         response += f"- GNSS Available: {'Yes' if gnss_available else 'No'}\n"
+        
+        if last_offsets:
+            response += "- Latest offsets:\n"
+            for component, offset_ns in last_offsets.items():
+                line = f"    {component}: {offset_ns} ns"
+                response += line + "\n"
 
-        if last_offset is not None:
-            response += f"- Last Offset: {last_offset} ns\n"
-
+        if last_servo_states:
+            response += "- Latest servo states:\n"
+            for component, state in last_servo_states.items():
+                line = f"    {component}: {state}"
+                response += line + "\n"
+        
         if dpll_locked and offset_in_range:
             response += "\nStatus: HEALTHY - Clock is synchronized"
         elif dpll_locked and not offset_in_range:
