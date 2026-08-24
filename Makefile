@@ -4,7 +4,7 @@ IMAGE_TAG ?= latest
 
 SERVER_IMAGE ?= $(IMAGE_REPO)/ptp-mcp-server:$(IMAGE_TAG)
 
-.PHONY: docker-build docker-push deploy test test-server
+.PHONY: docker-build docker-push deploy test test-server unit-test lint
 
 docker-build:
 	$(CONTAINER_TOOL) build -t $(SERVER_IMAGE) .
@@ -21,3 +21,13 @@ test:
 
 test-server:
 	python3 test_ptp_server.py
+
+# Cluster-free unit tests (no live cluster required)
+unit-test:
+	pytest tests/ -v
+
+# Lint the cluster-free unit-test harness. Scoped to tests/ because the legacy
+# modules predate any lint config and carry many pre-existing style violations;
+# linting them is tracked as follow-up work, not part of this change.
+lint:
+	flake8 tests/

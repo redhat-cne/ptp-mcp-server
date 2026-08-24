@@ -308,8 +308,9 @@ ptp-mcp-server/
 ├── ptp_model.py           # PTP data models
 ├── ptp_query_engine.py    # Natural language query engine
 ├── ptp_tools.py           # API endpoint implementations
-├── quick_test.py          # Quick test suite
+├── quick_test.py          # Quick test suite (needs live cluster)
 ├── performance_test.py    # Performance benchmarking
+├── tests/                 # Cluster-free pytest unit tests
 ├── requirements.txt       # Python dependencies
 ├── Dockerfile             # Container image definition
 └── k8s/                   # Kubernetes/OpenShift manifests
@@ -332,7 +333,20 @@ ptp-mcp-server/
 
 ## 🧪 Testing
 
-### Run All Tests
+### Cluster-Free Unit Tests
+Fast unit tests that exercise the log parser directly on representative raw log
+lines — no live cluster or `oc` binary required. This is the recommended way to
+validate parser changes locally and in CI.
+```bash
+pip install -r requirements.txt   # installs pytest + flake8
+make unit-test                    # == pytest tests/ -v
+make lint                         # == flake8 tests/
+```
+The suite covers the log-severity classifier (error/warning/info), the ptp4l
+rms/max summary-line fields, and regression coverage for the existing parsed
+fields (selected clock, port state, phc2sys offset, servo line).
+
+### Run All Tests (requires a live cluster)
 ```bash
 python quick_test.py
 ```

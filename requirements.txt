@@ -9,3 +9,7 @@ aiofiles>=23.2.1
 # HTTP transport dependencies (for OpenShift Lightspeed integration)
 starlette>=0.27.0
 uvicorn>=0.23.0
+
+# Development / test dependencies (cluster-free unit tests + lint)
+pytest>=7.0
+flake8>=6.0
