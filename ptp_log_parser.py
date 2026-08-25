@@ -406,18 +406,19 @@ class PTPLogParser:
 
         # Extract rms/max summary statistics
         # e.g. "rms 5 max 12 freq +1234 +/- 56 delay 700 +/- 8"
+        # Named capture groups map straight onto the parsed-dict keys, so the
+        # whole (all-integer) summary can be consumed in a single update().
         summary_match = re.search(
-            r"rms\s+(\d+)\s+max\s+(\d+)\s+freq\s+([+-]?\d+)\s+\+/-\s+(\d+)"
-            r"\s+delay\s+(-?\d+)\s+\+/-\s+(\d+)",
+            r"rms\s+(?P<rms>\d+)\s+max\s+(?P<max_offset>\d+)"
+            r"\s+freq\s+(?P<freq_mean>[+-]?\d+)\s+\+/-\s+(?P<freq_stddev>\d+)"
+            r"\s+delay\s+(?P<delay_mean>-?\d+)\s+\+/-\s+(?P<delay_stddev>\d+)",
             message
         )
         if summary_match:
-            parsed["rms"] = int(summary_match.group(1))
-            parsed["max_offset"] = int(summary_match.group(2))
-            parsed["freq_mean"] = int(summary_match.group(3))
-            parsed["freq_stddev"] = int(summary_match.group(4))
-            parsed["delay_mean"] = int(summary_match.group(5))
-            parsed["delay_stddev"] = int(summary_match.group(6))
+            parsed.update(
+                {key: int(value)
+                 for key, value in summary_match.groupdict().items()}
+            )
 
         # Extract BMCA information
         bmca_match = re.search(r"selected (\w+) clock", message)
