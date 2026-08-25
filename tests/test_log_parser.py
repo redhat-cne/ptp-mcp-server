@@ -1,8 +1,9 @@
 """Cluster-free unit tests for PTPLogParser.
 
-These tests exercise the log parser directly on representative raw log lines
-(see conftest.py). They never touch a live cluster or the `oc` binary — only
-the pure parsing/classification methods are called.
+These tests exercise the log parser directly on representative raw log lines.
+They never touch a live cluster or the `oc` binary — only the pure
+parsing/classification methods are called. Each test embeds the raw line it
+parses inline, so the input under test is visible next to its assertions.
 
 Covers CNF-26712:
   * log-severity classifier (error/warning/info)
@@ -36,21 +37,32 @@ def test_severity_classifier_labels_warning_lines(parser, line):
     assert parser._classify_severity(line) == "warning"
 
 
-def test_severity_classifier_normal_servo_line_is_info(parser, servo_line):
+def test_severity_classifier_normal_servo_line_is_info(parser):
+    # Normal ptp4l servo line (locked, s2) — the healthy steady-state case.
+    servo_line = ("ptp4l[123.456]: [ptp4l.0.config] master offset -5 s2 "
+                  "freq +1234 path delay 456")
     assert parser._classify_severity(servo_line) == "info"
 
 
-def test_healthy_dpll_decision_line_is_info(parser, healthy_dpll_decision_line):
-    # "On holdover false" / "In spec true" must NOT be flagged: the markers are
-    # anchored so routine decision lines stay info (regression for the bare
-    # "holdover" / "not in spec" false positives).
+def test_healthy_dpll_decision_line_is_info(parser):
+    # A routine, healthy DPLL decision line — in spec, not on holdover. It
+    # contains the substring "holdover" ("On holdover false"), so it guards
+    # against a bare-substring severity marker mis-classifying it as warning:
+    # the markers are anchored so routine decision lines stay info (regression
+    # for the bare "holdover" / "not in spec" false positives).
+    healthy_dpll_decision_line = (
+        "dpll[123]:[ptp4l.0.config] decision: Status 3, Offset 5, "
+        "In spec true, Source GNSS lost false, On holdover false")
     assert parser._classify_severity(healthy_dpll_decision_line) == "info"
     assert parser._parse_log_line(healthy_dpll_decision_line).level == "info"
 
 
-def test_out_of_spec_dpll_decision_line_is_warning(parser,
-                                                   out_of_spec_dpll_decision_line):
+def test_out_of_spec_dpll_decision_line_is_warning(parser):
+    # A DPLL decision line reporting an out-of-spec ("In spec false") clock:
     # "In spec false" and "On holdover true" are genuine warning conditions.
+    out_of_spec_dpll_decision_line = (
+        "dpll[123]:[ptp4l.0.config] decision: Status 3, Offset 9999, "
+        "In spec false, Source GNSS lost false, On holdover true")
     assert parser._classify_severity(out_of_spec_dpll_decision_line) == "warning"
 
 
@@ -67,17 +79,26 @@ def test_register_severity_pattern_extends_table(parser):
     assert parser._classify_severity("some custom marker line") == "warning"
 
 
-def test_parse_log_line_sets_level_from_classifier(parser, fault_line,
-                                                   timeout_line, servo_line):
+def test_parse_log_line_sets_level_from_classifier(parser):
     # _parse_log_line no longer hard-codes level="info"; error markers surface.
+    fault_line = ("ptp4l[123.456]: [ptp4l.0.config] port 1: fault detected "
+                  "on interface")
+    timeout_line = ("ptp4l[123.456]: [ptp4l.0.config] timed out while polling "
+                    "for tx timestamp")
+    servo_line = ("ptp4l[123.456]: [ptp4l.0.config] master offset -5 s2 "
+                  "freq +1234 path delay 456")
     assert parser._parse_log_line(fault_line).level == "error"
     assert parser._parse_log_line(timeout_line).level == "error"
     assert parser._parse_log_line(servo_line).level == "info"
 
 
-def test_error_level_flows_through_parse_log_line(parser, fault_line, clockcheck_line):
+def test_error_level_flows_through_parse_log_line(parser):
     # Demonstrates that check_ptp_health's error_count/warning_count (which count
     # LogEntry.level == "error"/"warning") would now be non-zero.
+    fault_line = ("ptp4l[123.456]: [ptp4l.0.config] port 1: fault detected "
+                  "on interface")
+    clockcheck_line = ("ptp4l[123.456]: [ptp4l.0.config] clockcheck: clock "
+                       "jumped backwards")
     entries = [parser._parse_log_line(fault_line),
                parser._parse_log_line(clockcheck_line)]
     assert sum(1 for e in entries if e.level == "error") == 1
@@ -105,10 +126,12 @@ def test_rms_summary_negative_freq_mean(parser):
     assert parsed["freq_mean"] == -42
 
 
-def test_rms_summary_line_parsed_end_to_end(parser, summary_line):
+def test_rms_summary_line_parsed_end_to_end(parser):
     # Full raw line through _parse_log_line: proves component routing
     # (ptp4l detection -> _parse_component_message -> _parse_ptp4l_message)
     # reaches the summary parser, not just the helper in isolation.
+    summary_line = ("ptp4l[123.456]: [ptp4l.0.config] rms 5 max 12 "
+                    "freq +1234 +/- 56 delay 700 +/- 8")
     entry = parser._parse_log_line(summary_line)
     assert entry.component == "ptp4l"
     assert entry.level == "info"
@@ -151,13 +174,19 @@ def test_servo_state_matches_pr8_servostate_enum(parser):
 
 # --- Regression: previously-parsed fields still parse --------------------
 
-def test_selected_clock_still_parses(parser, selected_clock_line):
+def test_selected_clock_still_parses(parser):
+    # A ptp4l BMCA selected-clock line.
+    selected_clock_line = ("ptp4l[123.456]: [ptp4l.0.config] selected local "
+                           "clock 001122.fffe.334455 as best master")
     entry = parser._parse_log_line(selected_clock_line)
     assert entry.component == "ptp4l"
     assert entry.parsed_data["selected_clock"] == "local"
 
 
-def test_port_state_still_parses(parser, port_state_line):
+def test_port_state_still_parses(parser):
+    # A ptp4l port-state transition line.
+    port_state_line = ("ptp4l[123.456]: [ptp4l.0.config] port 1: LISTENING to "
+                       "MASTER on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES")
     entry = parser._parse_log_line(port_state_line)
     assert entry.component == "ptp4l"
     assert entry.parsed_data["port"] == 1
@@ -165,7 +194,10 @@ def test_port_state_still_parses(parser, port_state_line):
     assert entry.parsed_data["to_state"] == "MASTER"
 
 
-def test_phc2sys_offset_still_parses(parser, phc2sys_line):
+def test_phc2sys_offset_still_parses(parser):
+    # A phc2sys CLOCK_REALTIME offset line.
+    phc2sys_line = ("phc2sys[13465352.526]: [ptp4l.0.config:6] CLOCK_REALTIME "
+                    "phc offset       -12 s2 freq   -6701 delay    565")
     entry = parser._parse_log_line(phc2sys_line)
     assert entry.component == "phc2sys"
     assert entry.parsed_data["offset"] == -12
@@ -174,8 +206,10 @@ def test_phc2sys_offset_still_parses(parser, phc2sys_line):
     assert entry.parsed_data["delay"] == 565
 
 
-def test_parse_log_line_returns_logentry_shape(parser, servo_line):
+def test_parse_log_line_returns_logentry_shape(parser):
     # Return conventions unchanged: LogEntry with the same attributes.
+    servo_line = ("ptp4l[123.456]: [ptp4l.0.config] master offset -5 s2 "
+                  "freq +1234 path delay 456")
     entry = parser._parse_log_line(servo_line)
     assert entry.component == "ptp4l"
     assert entry.level == "info"
