@@ -1,6 +1,19 @@
 #!/usr/bin/env python3
 """
 PTP Log Parser - Parses linuxptp daemon logs and extracts structured information
+
+Severity classification
+------------------------
+linuxptp text logs carry no explicit level token, so each entry's ``level`` is
+derived by matching the raw line against an ordered, extensible severity table
+(``PTPLogParser.severity_patterns``). Error markers are checked before warning
+markers (first match wins); lines that match nothing default to ``info``.
+Markers are anchored to avoid false positives on routine lines (e.g. the DPLL
+decision line's healthy ``On holdover false`` / ``In spec true`` must stay
+``info``). The table is a plain list of ``(compiled_regex, level)`` pairs, so
+later stories can
+register additional markers via :meth:`PTPLogParser.register_severity_pattern`
+without editing the classifier core.
 """
 
 import json
@@ -66,6 +79,59 @@ class PTPLogParser:
             "frequency_change": r"freq\s+(-?\d+)",
         }
 
+        # Ordered severity classification table. Each entry is a
+        # (compiled_regex, level) pair, matched against the raw log line.
+        # Order matters: error markers are listed first so an error line is
+        # never down-graded to warning. First match wins; a line matching
+        # nothing is classified "info". Markers are deliberately conservative
+        # to avoid false positives on normal servo lines. Extend via
+        # register_severity_pattern() rather than editing this list.
+        self.severity_patterns: List[Tuple[Any, str]] = [
+            (re.compile(pattern, re.IGNORECASE), level)
+            for pattern, level in (
+                (r"fault", "error"),
+                (r"lost connection", "error"),
+                (r"timed out", "error"),
+                (r"failed", "error"),
+                (r"clockcheck", "warning"),
+                (r"clock jumped", "warning"),
+                # Out-of-spec is reported as "In spec false" in the DPLL
+                # decision line; "In spec true" must stay info.
+                (r"in spec false", "warning"),
+                # Match holdover entry/active ("entering holdover",
+                # "On holdover true") but NOT the healthy "On holdover false"
+                # that appears in every routine DPLL decision line.
+                (r"holdover(?!\s+false)", "warning"),
+            )
+        ]
+
+    def register_severity_pattern(self, pattern: str, level: str) -> None:
+        """Register an additional severity marker.
+
+        Later stories can add their own warning/error markers without editing
+        the core classifier. The new pattern is appended, so existing (earlier)
+        patterns keep precedence under the first-match-wins rule; register an
+        error marker before the seeded warning markers if it must win over them.
+
+        Args:
+            pattern: Regex matched (case-insensitively) against the raw line.
+            level: Severity to assign on a match ("error" or "warning").
+        """
+        self.severity_patterns.append((re.compile(pattern, re.IGNORECASE), level))
+
+    def _classify_severity(self, line: str) -> str:
+        """Classify a raw log line's severity.
+
+        Matches the line against the ordered severity_patterns table and
+        returns the level of the first matching entry ("error" or "warning"),
+        defaulting to "info" when nothing matches. Classifying against the raw
+        line means severity works regardless of which component pattern matched.
+        """
+        for regex, level in self.severity_patterns:
+            if regex.search(line):
+                return level
+        return "info"
+
     async def get_ptp_logs(self, namespace: str = None, lines: int = 1000, since: str = None, kubeconfig_path: str = None) -> List[LogEntry]:
         """Get PTP logs from OpenShift cluster
 
@@ -126,13 +192,14 @@ class PTPLogParser:
         # Try different log formats
         parsed_data = {}
         component = "unknown"
-        level = "info"
+        # Classify severity from the raw line (linuxptp logs carry no level
+        # token); known warning/error markers override the "info" default.
+        level = self._classify_severity(line)
         message = line
-        
+
         # Try Go-style logs first
         go_match = re.match(self.patterns["go_log"], line)
         if go_match:
-            level = "info"
             timestamp_str = go_match.group(2)
             try:
                 timestamp = datetime.strptime(timestamp_str, "%H:%M:%S.%f")
@@ -344,6 +411,22 @@ class PTPLogParser:
             parsed["state"] = offset_match.group(2)
             parsed["frequency"] = int(offset_match.group(3))
             parsed["path_delay"] = int(offset_match.group(4))
+
+        # Extract rms/max summary statistics
+        # e.g. "rms 5 max 12 freq +1234 +/- 56 delay 700 +/- 8"
+        # Named capture groups map straight onto the parsed-dict keys, so the
+        # whole (all-integer) summary can be consumed in a single update().
+        summary_match = re.search(
+            r"rms\s+(?P<rms>\d+)\s+max\s+(?P<max_offset>\d+)"
+            r"\s+freq\s+(?P<freq_mean>[+-]?\d+)\s+\+/-\s+(?P<freq_stddev>\d+)"
+            r"\s+delay\s+(?P<delay_mean>-?\d+)\s+\+/-\s+(?P<delay_stddev>\d+)",
+            message
+        )
+        if summary_match:
+            parsed.update(
+                {key: int(value)
+                 for key, value in summary_match.groupdict().items()}
+            )
 
         # Extract BMCA information
         bmca_match = re.search(r"selected (\w+) clock", message)

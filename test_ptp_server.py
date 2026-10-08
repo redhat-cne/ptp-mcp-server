@@ -493,8 +493,7 @@ if __name__ == "__main__":
         demonstrate_sample_data()
 
     # Always run unit tests for clock type detection
-    all_pass = True
-    all_pass = test_clock_type_detection() and all_pass
+    all_pass = test_clock_type_detection()
     all_pass = test_config_parser_profile_fields() and all_pass
 
     if all_pass:
