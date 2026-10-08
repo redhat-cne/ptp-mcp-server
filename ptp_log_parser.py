@@ -55,7 +55,7 @@ class PTPLogParser:
             "pmc_parent_port": r"parentPortIdentity\s+([a-f0-9.-]+)",
             "clockcheck": r"clockcheck:\s*(.+)",
             "servo_state": r"offset\s+(-?\d+)\s+(s[0-2])\s+freq\s+(-?\d+)",
-            "port_state_change": r"port\s+(\d+)\s*(?:\([^)]+\))?:\s+(\w+)\s+to\s+(\w+)",
+            "port_state_change": r"port\s+(\d+)\s*(?:\(([^)]+)\))?:\s+(\w+)\s+to\s+(\w+)",
             "gnss_fix": r"(?:fix|locked|acquired)",
             "gnss_loss": r"(?:lost|no fix|unlocked)",
             "holdover_entry": r"(?:entering|on)\s+holdover",
@@ -215,6 +215,14 @@ class PTPLogParser:
             parsed["in_spec"] = decision_match.group(3) == "true"
             parsed["source_lost"] = decision_match.group(4) == "true"
             parsed["on_holdover"] = decision_match.group(5) == "true"
+
+        event_match = re.search(r"state (\w+), Offset (-?\d+), In spec (\w+), Source \w+ lost (\w+), On holdover (\w+)", message)
+        if event_match:
+            parsed["state"] = event_match.group(1)
+            parsed["offset"] = int(event_match.group(2))
+            parsed["in_spec"] = event_match.group(3) == "true"
+            parsed["source_lost"] = event_match.group(4) == "true"
+            parsed["on_holdover"] = event_match.group(5) == "true"
         
         return parsed
     
@@ -517,18 +525,39 @@ class PTPLogParser:
         dpll_timestamp = None
         phc2sys_timestamp = None
         ptp4l_timestamp = None
+        has_dpll_status = False
 
         # Look for DPLL log lines (for systems with hardware DPLL)
         dpll_logs = [log for log in logs if "dpll" in log.component.lower()]
         if dpll_logs:
-            latest_dpll = max(dpll_logs, key=lambda x: x.timestamp)
+            dpll_status_logs = [
+                log for log in dpll_logs
+                if "status" in log.parsed_data
+                or "state" in log.parsed_data
+                or log.parsed_data.get("frequency_status") is not None
+            ]
+            latest_dpll = max(dpll_status_logs or dpll_logs, key=lambda x: x.timestamp)
             parsed = latest_dpll.parsed_data
-            dpll_timestamp = latest_dpll.timestamp
 
             # Check for decision messages (Go-style DPLL logs)
             if "status" in parsed:
+                has_dpll_status = True
+                dpll_timestamp = latest_dpll.timestamp
                 sync_status["dpll_locked"] = parsed.get("status", 0) == 3
                 sync_status["offset_in_range"] = parsed.get("in_spec", False)
+                if parsed.get("offset") is not None:
+                    sync_status["last_offsets"]["dpll"] = parsed["offset"]
+                sync_status["last_update"] = latest_dpll.timestamp.isoformat() if latest_dpll.timestamp else None
+                if parsed.get("source_lost"):
+                    sync_status["dpll_source_lost"] = True
+                if parsed.get("on_holdover"):
+                    sync_status["dpll_on_holdover"] = True
+            elif parsed.get("state") in ("s0", "s1", "s2"):
+                has_dpll_status = True
+                dpll_timestamp = latest_dpll.timestamp
+                sync_status["dpll_locked"] = parsed.get("state") == "s2"
+                sync_status["offset_in_range"] = parsed.get("in_spec", False)
+                sync_status["last_servo_states"]["dpll"] = parsed["state"]
                 if parsed.get("offset") is not None:
                     sync_status["last_offsets"]["dpll"] = parsed["offset"]
                 sync_status["last_update"] = latest_dpll.timestamp.isoformat() if latest_dpll.timestamp else None
@@ -551,7 +580,9 @@ class PTPLogParser:
                 if comp_parsed.get("offset") is not None:
                     sync_status["last_offsets"]["dpll"] = comp_parsed["offset"]
                 # Use DPLL state to determine lock if no decision message was found
-                if "status" not in parsed:
+                if not has_dpll_status:
+                    has_dpll_status = True
+                    dpll_timestamp = latest_dpll_comp.timestamp
                     dpll_state = comp_parsed.get("state", "").lower()
                     sync_status["dpll_locked"] = dpll_state in ("locked", "locked_ho")
                     sync_status["last_update"] = latest_dpll_comp.timestamp.isoformat() if latest_dpll_comp.timestamp else None
@@ -573,14 +604,12 @@ class PTPLogParser:
             phc2sys_timestamp = latest_phc2sys.timestamp
 
             # s2 means locked/tracking
-            if servo_state == "s2":
+            if not has_dpll_status and servo_state == "s2":
                 sync_status["dpll_locked"] = True
 
-            # Check offset is in range (within 1000ns is generally good)
             offset = parsed.get("offset")
             if offset is not None:
                 sync_status["last_offsets"]["phc2sys"] = offset
-                sync_status["offset_in_range"] = abs(offset) < 1000
                 sync_status["last_update"] = latest_phc2sys.timestamp.isoformat() if latest_phc2sys.timestamp else None
 
         # Extract ptp4l offset
@@ -648,7 +677,7 @@ class PTPLogParser:
             current_port_upper = current_port_state.upper()
 
             # SLAVE state with external grandmaster = healthy
-            if "SLAVE" in current_port_upper and not sync_status["grandmaster_lost"]:
+            if "SLAVE" in current_port_upper and not sync_status["grandmaster_lost"] and not has_dpll_status:
                 # Only set locked if ptp4l state is more recent than phc2sys
                 if ptp4l_timestamp and phc2sys_timestamp:
                     if ptp4l_timestamp >= phc2sys_timestamp:
@@ -815,7 +844,7 @@ class PTPLogParser:
             return "unknown"
         if offset_stats["std_dev"] < 50 and clockcheck_count == 0:
             return "stable"
-        elif offset_stats["std_dev"] < 200 or clockcheck_count <= 2:
+        elif offset_stats["std_dev"] < 200 and clockcheck_count <= 2:
             return "degraded"
         return "unstable"
 
@@ -909,8 +938,9 @@ class PTPLogParser:
                 match = re.search(self.extended_patterns["port_state_change"], log.message)
                 if match:
                     port_num = match.group(1)
-                    from_state = match.group(2)
-                    to_state = match.group(3)
+                    interface = match.group(2)
+                    from_state = match.group(3)
+                    to_state = match.group(4)
 
                     transition = {
                         "timestamp": log.timestamp.isoformat() if log.timestamp else None,
@@ -918,6 +948,8 @@ class PTPLogParser:
                         "from_state": from_state,
                         "to_state": to_state
                     }
+                    if interface:
+                        transition["interface"] = interface
                     result["transitions"].append(transition)
                     result["current_states"][port_num] = to_state
 
@@ -1062,15 +1094,15 @@ class PTPLogParser:
 
         gnss_status_values = []
 
-        for log in logs:
+        for log in sorted(logs, key=lambda entry: entry.timestamp):
             # Check ts2phc and gnss component logs
             if log.component in ["ts2phc", "gnss"]:
                 if "gnss_status" in log.parsed_data:
                     status = log.parsed_data["gnss_status"]
                     gnss_status_values.append(status)
                     result["gnss_status"] = status
+                    result["gnss_available"] = status > 0
                     if status > 0:
-                        result["gnss_available"] = True
                         result["last_valid_fix"] = log.timestamp.isoformat() if log.timestamp else None
                         result["fix_quality"] = status
 
