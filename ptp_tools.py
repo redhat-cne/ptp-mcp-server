@@ -422,6 +422,11 @@ class PTPTools:
                     "T-BC": "Telecom Boundary Clock",
                 }
                 current_role_label = clock_type_labels.get(current_clock_type, current_clock_type)
+                current_status = {
+                    "GM": "grandmaster",
+                    "BC": "boundary",
+                    "T-BC": "boundary",
+                }.get(current_clock_type, "slave")
                 hierarchy_chain.append({
                     "level": 3,
                     "role": f"Current Node ({current_role_label})",
@@ -430,7 +435,7 @@ class PTPTools:
                     "clock_class": hierarchy.get("current_clock", {}).get("clock_class"),
                     "priority1": hierarchy.get("current_clock", {}).get("priorities", {}).get("priority1"),
                     "priority2": hierarchy.get("current_clock", {}).get("priorities", {}).get("priority2"),
-                    "status": "slave"
+                    "status": current_status
                 })
 
                 result = {
@@ -488,7 +493,7 @@ class PTPTools:
             elif "Parent" in clock["role"]:
                 lines.append(f"{indent}{arrow}Parent BC: {clock.get('identity')} (port {clock.get('port_identity')})")
             else:
-                lines.append(f"{indent}{arrow}This Node: {clock.get('clock_type')} on domain {clock.get('domain')} (slave)")
+                lines.append(f"{indent}{arrow}This Node: {clock.get('clock_type')} on domain {clock.get('domain')} ({clock.get('status', 'unknown')})")
 
         if steps_removed is not None:
             lines.append(f"\nSteps removed from grandmaster: {steps_removed}")
@@ -960,8 +965,23 @@ class PTPTools:
                 port_data = self.log_parser.extract_port_transitions(logs)
 
                 if interface:
-                    filtered_transitions = [t for t in port_data["transitions"] if t.get("port") == interface]
-                    port_data["transitions"] = filtered_transitions
+                    selected_ports = {
+                        transition["port"]
+                        for transition in port_data["transitions"]
+                        if transition.get("interface") == interface or transition.get("port") == interface
+                    }
+                    port_data["transitions"] = [
+                        transition for transition in port_data["transitions"]
+                        if transition["port"] in selected_ports
+                    ]
+                    port_data["ports"] = {
+                        port: data for port, data in port_data["ports"].items()
+                        if port in selected_ports
+                    }
+                    port_data["current_states"] = {
+                        port: state for port, state in port_data["current_states"].items()
+                        if port in selected_ports
+                    }
 
                 result = {
                     "success": True,
