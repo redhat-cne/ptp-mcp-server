@@ -4,7 +4,7 @@ IMAGE_TAG ?= latest
 
 SERVER_IMAGE ?= $(IMAGE_REPO)/ptp-mcp-server:$(IMAGE_TAG)
 
-.PHONY: docker-build docker-push deploy test
+.PHONY: docker-build docker-push deploy test test-server
 
 docker-build:
 	$(CONTAINER_TOOL) build -t $(SERVER_IMAGE) .
@@ -18,3 +18,6 @@ deploy:
 
 test:
 	python quick_test.py
+
+test-server:
+	python3 test_ptp_server.py

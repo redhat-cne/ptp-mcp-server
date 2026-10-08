@@ -331,6 +331,100 @@ class PTPMCPServer:
                         }
                     }
                 ),
+                Tool(
+                    name="analyze_servo_stability",
+                    description="Analyze PTP servo stability and offset variance",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "namespace": {"type": "string", "default": "openshift-ptp"},
+                            "kubeconfig": {"type": "string"}
+                        }
+                    }
+                ),
+                Tool(
+                    name="analyze_frequency_drift",
+                    description="Analyze PTP clock frequency drift",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "namespace": {"type": "string", "default": "openshift-ptp"},
+                            "window_minutes": {"type": "integer", "default": 60},
+                            "kubeconfig": {"type": "string"}
+                        }
+                    }
+                ),
+                Tool(
+                    name="analyze_holdover",
+                    description="Analyze PTP holdover events and duration",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "namespace": {"type": "string", "default": "openshift-ptp"},
+                            "kubeconfig": {"type": "string"}
+                        }
+                    }
+                ),
+                Tool(
+                    name="get_gnss_status",
+                    description="Get GNSS fix and signal status",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "namespace": {"type": "string", "default": "openshift-ptp"},
+                            "kubeconfig": {"type": "string"}
+                        }
+                    }
+                ),
+                Tool(
+                    name="get_port_status",
+                    description="Get PTP port states and transition history",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "namespace": {"type": "string", "default": "openshift-ptp"},
+                            "interface": {"type": "string"},
+                            "include_history": {"type": "boolean", "default": True},
+                            "kubeconfig": {"type": "string"}
+                        }
+                    }
+                ),
+                Tool(
+                    name="get_ptp_hardware_info",
+                    description="Get PTP capabilities for network hardware",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "namespace": {"type": "string", "default": "openshift-ptp"},
+                            "interface": {"type": "string"},
+                            "kubeconfig": {"type": "string"}
+                        }
+                    }
+                ),
+                Tool(
+                    name="map_hardware_to_config",
+                    description="Map configured PTP interfaces to hardware capabilities",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "namespace": {"type": "string", "default": "openshift-ptp"},
+                            "kubeconfig": {"type": "string"}
+                        }
+                    }
+                ),
+                Tool(
+                    name="get_ptp_metrics",
+                    description="Get PTP Prometheus metrics from the daemon",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "namespace": {"type": "string", "default": "openshift-ptp"},
+                            "filter": {"type": "string"},
+                            "include_summary": {"type": "boolean", "default": True},
+                            "kubeconfig": {"type": "string"}
+                        }
+                    }
+                ),
             ]
             return ListToolsResult(tools=tools)
 
@@ -360,6 +454,22 @@ class PTPMCPServer:
                     result = await self.ptp_tools.run_pmc_query(arguments)
                 elif name == "get_ptp_runtime_configs":
                     result = await self.ptp_tools.get_ptp_runtime_configs(arguments)
+                elif name == "analyze_servo_stability":
+                    result = await self.ptp_tools.analyze_servo_stability(arguments)
+                elif name == "analyze_frequency_drift":
+                    result = await self.ptp_tools.analyze_frequency_drift(arguments)
+                elif name == "analyze_holdover":
+                    result = await self.ptp_tools.analyze_holdover(arguments)
+                elif name == "get_gnss_status":
+                    result = await self.ptp_tools.get_gnss_status(arguments)
+                elif name == "get_port_status":
+                    result = await self.ptp_tools.get_port_status(arguments)
+                elif name == "get_ptp_hardware_info":
+                    result = await self.ptp_tools.get_ptp_hardware_info(arguments)
+                elif name == "map_hardware_to_config":
+                    result = await self.ptp_tools.map_hardware_to_config(arguments)
+                elif name == "get_ptp_metrics":
+                    result = await self.ptp_tools.get_ptp_metrics(arguments)
                 else:
                     raise ValueError(f"Unknown tool: {name}")
 

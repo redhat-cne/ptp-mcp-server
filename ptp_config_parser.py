@@ -107,7 +107,10 @@ class PTPConfigParser:
             "phc2sysOpts": profile.get("phc2sysOpts"),
             "ptp4lOpts": profile.get("ptp4lOpts"),
             "ptp4lConf": self._parse_ptp4l_conf(profile.get("ptp4lConf", "")),
-            "ptpClockThreshold": self._parse_ptp_clock_threshold(profile.get("ptpClockThreshold", {}))
+            "ptpClockThreshold": self._parse_ptp_clock_threshold(profile.get("ptpClockThreshold", {})),
+            "ts2phcOpts": profile.get("ts2phcOpts"),
+            "ts2phcConf": profile.get("ts2phcConf", ""),
+            "ptpSettings": profile.get("ptpSettings", {}),
         }
         
         return parsed_profile
@@ -120,9 +123,6 @@ class PTPConfigParser:
         parsed_conf = {
             "interfaces": {},
             "global": {},
-            "servo": {},
-            "transport": {},
-            "clock": {}
         }
         
         current_section = "global"
@@ -136,7 +136,7 @@ class PTPConfigParser:
             # Check for section headers
             if line.startswith('[') and line.endswith(']'):
                 section_name = line[1:-1]
-                if section_name in ["global", "servo", "transport", "clock"]:
+                if section_name == "global":
                     current_section = section_name
                 else:
                     # Interface section
@@ -151,6 +151,11 @@ class PTPConfigParser:
                 key, value = line.split(' ', 1)
                 key = key.strip()
                 value = value.strip()
+
+                # Rename ptp4l's clock_type to ptp4l_clock_type to avoid
+                # confusion with the detected overall clock type
+                if key == "clock_type" and current_section == "global":
+                    key = "ptp4l_clock_type"
                 
                 if current_section == "interfaces":
                     parsed_conf["interfaces"][interface_name][key] = self._parse_value(value)
@@ -206,10 +211,10 @@ class PTPConfigParser:
         }
     
     def get_clock_type(self, config: Dict[str, Any]) -> str:
-        """Extract clock type from PTP configuration"""
+        """Extract ptp4l clock type from PTP configuration"""
         for profile in config.get("spec", {}).get("profile", []):
             ptp4l_conf = profile.get("ptp4lConf", {})
-            clock_type = ptp4l_conf.get("clock", {}).get("clock_type")
+            clock_type = ptp4l_conf.get("global", {}).get("ptp4l_clock_type")
             if clock_type:
                 return clock_type
         return "Unknown"

@@ -349,14 +349,31 @@ asyncio.run(ask_questions())
   "grandmaster": {
     "status": "s0",
     "interface": "ens7f0",
-    "offset": -12,
-    "frequency": -6701
+    "last_offsets": {
+      "ptp4l": -18,
+      "phc2sys": -12,
+      "ts2phc": -7
+    },
+    "last_frequencies": {
+      "ptp4l": -210,
+      "phc2sys": -6701
+    }
   },
   "sync_status": {
     "dpll_locked": true,
     "gnss_available": true,
     "offset_in_range": true,
-    "last_offset": -2
+    "last_offsets": {
+      "dpll": -2,
+      "ptp4l": -18,
+      "phc2sys": -12,
+      "ts2phc": -7
+    },
+    "last_servo_states": {
+      "dpll": "s2",
+      "phc2sys": "s2",
+      "ts2phc": "s3"
+    }
   },
   "log_entries": [...]
 }
